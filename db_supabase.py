@@ -1,0 +1,2834 @@
+"""
+db_supabase.py — Supabase 구현 (CRUD/조회). 보고서용 조회는 raw rows까지만.
++ 사용자 인증/관리 CRUD (app_users, audit_logs)
+"""
+import time
+import pandas as pd
+from supabase import create_client, Client
+from db_base import DBBase
+from config import SUPABASE_URL, SUPABASE_KEY
+from services.tz_utils import today_kst, days_ago_kst
+
+# 옵션마스터 메모리 캐시 (TTL 기반)
+_option_cache = {
+    'data': None,         # 전체 옵션 목록
+    'data_list': None,    # OrderProcessor 호환 dict list
+    'ts': 0,              # 마지막 로드 시간
+    'ttl': 1800,          # 30분 캐시 (초) — 옵션마스터는 자주 안 바뀜
+}
+
+# 권한 메모리 캐시 (TTL 기반)
+_perm_cache = {
+    'data': None,         # {role: {page_key: bool}}
+    'ts': 0,
+    'ttl': 600,           # 10분 캐시 (초)
+}
+
+# 가격표 메모리 캐시 (TTL 기반)
+_price_cache = {
+    'data': None,         # {product_name: {SKU, 네이버판매가, 쿠팡판매가, 로켓판매가}}
+    'ts': 0,
+    'ttl': 1800,          # 30분 캐시 (초)
+}
+
+
+class SupabaseDB(DBBase):
+    def __init__(self):
+        self.client: Client = None
+        self._db_cols = None
+
+    def connect(self, url=None, key=None):
+        try:
+            _url = url or SUPABASE_URL
+            _key = key or SUPABASE_KEY
+            self.client = create_client(_url, _key)
+            try:
+                self.client.rpc("ensure_stock_ledger_columns", {}).execute()
+            except Exception as col_err:
+                print(f"Column migration note: {col_err}")
+            self._db_cols = self.get_db_columns()
+            return True
+        except Exception as e:
+            print(f"[DB connect error] {e}")
+            return False
+
+    def get_db_columns(self):
+        try:
+            sample = self.client.table("stock_ledger").select("*").limit(1).execute()
+            if sample.data:
+                return set(sample.data[0].keys())
+            return None
+        except:
+            return None
+
+    def _filter_payload(self, payload_list):
+        """DB에 없는 컬럼을 payload에서 자동 제거."""
+        if not self._db_cols or not payload_list:
+            return payload_list
+        return [{k: v for k, v in row.items() if k in self._db_cols} for row in payload_list]
+
+    def _paginate_query(self, table, query_builder):
+        """페이지네이션으로 전체 데이터 조회."""
+        all_data = []
+        offset = 0
+        while True:
+            res = query_builder(table).range(offset, offset + 999).execute()
+            if not res.data:
+                break
+            all_data.extend(res.data)
+            if len(res.data) < 1000:
+                break
+            offset += 1000
+        return all_data
+
+    # --- stock_ledger CRUD ---
+
+    @staticmethod
+    def _normalize_product_names(payload_list):
+        """품목명 공백 정규화 — '(수)건해삼채 200g' → '(수)건해삼채200g'."""
+        for row in payload_list:
+            pn = row.get('product_name', '')
+            if pn:
+                row['product_name'] = str(pn).replace(' ', '').strip()
+        return payload_list
+
+    def insert_stock_ledger(self, payload_list):
+        if not payload_list:
+            return {'inserted': 0, 'failed': 0, 'errors': []}
+        payload_list = self._normalize_product_names(payload_list)
+        filtered = self._filter_payload(payload_list)
+        # 배치 삽입 시도 → 실패 시 개별 삽입 fallback
+        try:
+            self.client.table("stock_ledger").insert(filtered).execute()
+            return {'inserted': len(filtered), 'failed': 0, 'errors': []}
+        except Exception as batch_err:
+            print(f"[stock_ledger] 배치 삽입 실패, 개별 삽입 시도: {batch_err}")
+            inserted = 0
+            failed = 0
+            errors = []
+            for row in filtered:
+                try:
+                    self.client.table("stock_ledger").insert(row).execute()
+                    inserted += 1
+                except Exception as row_err:
+                    failed += 1
+                    pname = row.get('product_name', '?')
+                    err_msg = f"{pname}: {row_err}"
+                    errors.append(err_msg)
+                    print(f"[stock_ledger] 개별 삽입 실패 — {err_msg}")
+            return {'inserted': inserted, 'failed': failed, 'errors': errors}
+
+    def upsert_stock_ledger_idempotent(self, payload_list):
+        """event_uid 기반 중복 방지 insert.
+        event_uid가 이미 존재하면 스킵(무시).
+        event_uid가 없는 레코드는 일반 insert.
+        Returns: (inserted_count, skipped_count)
+        """
+        if not payload_list:
+            return 0, 0
+        payload_list = self._normalize_product_names(payload_list)
+        filtered = self._filter_payload(payload_list)
+
+        # event_uid가 있는 것과 없는 것 분리
+        with_uid = [p for p in filtered if p.get('event_uid')]
+        without_uid = [p for p in filtered if not p.get('event_uid')]
+
+        inserted = 0
+        skipped = 0
+
+        # event_uid 있는 것: 배치 upsert (on_conflict → 스킵)
+        if with_uid:
+            BATCH = 200
+            for i in range(0, len(with_uid), BATCH):
+                chunk = with_uid[i:i + BATCH]
+                try:
+                    self.client.table("stock_ledger").upsert(
+                        chunk, on_conflict="event_uid",
+                        ignore_duplicates=True
+                    ).execute()
+                    inserted += len(chunk)
+                except Exception as e1:
+                    # ignore_duplicates 미지원 시 개별 fallback
+                    print(f"[DB] stock_ledger batch upsert failed: {e1}")
+                    for p in chunk:
+                        try:
+                            self.client.table("stock_ledger").insert(p).execute()
+                            inserted += 1
+                        except Exception:
+                            skipped += 1
+
+        # event_uid 없는 것: 배치 insert
+        if without_uid:
+            BATCH = 200
+            for i in range(0, len(without_uid), BATCH):
+                chunk = without_uid[i:i + BATCH]
+                self.client.table("stock_ledger").insert(chunk).execute()
+                inserted += len(chunk)
+
+        return inserted, skipped
+
+    def delete_stock_ledger_all(self):
+        res = self.client.table("stock_ledger").delete().neq("id", 0).execute()
+        return len(res.data) if res.data else 0
+
+    def delete_stock_ledger_by(self, date_str, record_type, location=None,
+                               product_names=None):
+        q = self.client.table("stock_ledger").delete() \
+            .eq("transaction_date", date_str).eq("type", record_type)
+        if location:
+            q = q.eq("location", location)
+        if product_names:
+            q = q.in_("product_name", list(product_names))
+        res = q.execute()
+        return len(res.data) if res.data else 0
+
+    def query_stock_ledger(self, date_to, date_from=None, location=None,
+                            category=None, type_list=None, order_desc=False):
+        def builder(table):
+            q = self.client.table(table).select("*")
+            q = q.lte("transaction_date", date_to)
+            if date_from:
+                q = q.gte("transaction_date", date_from)
+            if location and location != "전체":
+                q = q.eq("location", location)
+            if category and category != "전체":
+                q = q.eq("category", category)
+            if type_list:
+                q = q.in_("type", type_list)
+            if order_desc:
+                q = q.order("transaction_date", desc=True)
+            return q
+        return self._paginate_query("stock_ledger", builder)
+
+    def query_stock_by_location(self, location, select_fields=None):
+        sel_str = ",".join(select_fields) if select_fields else "*"
+
+        def builder(table):
+            return self.client.table(table).select(sel_str).eq("location", location)
+        return self._paginate_query("stock_ledger", builder)
+
+    def query_filter_options(self):
+        def builder(table):
+            return self.client.table(table).select("location,category")
+        all_vals = self._paginate_query("stock_ledger", builder)
+        locs = sorted(set(r['location'] for r in all_vals if r.get('location')))
+        cats = sorted(set(r['category'] for r in all_vals if r.get('category')))
+        return locs, cats
+
+    def query_product_categories(self):
+        """stock_ledger에서 product_name → category 매핑 조회.
+        가장 최근 레코드의 category를 사용.
+        공백 포함/미포함 이름 모두 매핑하여 product_costs와의 호환성 보장.
+        Returns: {product_name: category} dict.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            rows = self._paginate_query("stock_ledger",
+                lambda t: self.client.table(t).select("product_name,category").order("id", desc=True))
+            cat_map = {}
+            for r in rows:
+                name = (r.get('product_name') or '').strip()
+                cat = (r.get('category') or '').strip()
+                if not name or not cat:
+                    continue
+                # stock_ledger 원본 이름 (공백 제거된 상태)
+                if name not in cat_map:
+                    cat_map[name] = cat
+                # 공백 제거 정규화 버전도 추가 (이미 동일할 수 있음)
+                norm = name.replace(' ', '')
+                if norm not in cat_map:
+                    cat_map[norm] = cat
+            logger.info(f"query_product_categories: {len(cat_map)} entries from {len(rows)} rows")
+            return cat_map
+        except Exception as e:
+            logger.error(f"query_product_categories failed: {e}")
+            return {}
+
+    def query_unique_product_names(self):
+        """stock_ledger에서 고유 품목명+단위 목록 반환 (양수 재고 기준)."""
+        def builder(table):
+            return self.client.table(table).select("product_name,qty,unit")
+        all_data = self._paginate_query("stock_ledger", builder)
+        totals = {}
+        units = {}
+        for r in all_data:
+            name = r.get('product_name', '')
+            if name:
+                totals[name] = totals.get(name, 0) + (r.get('qty', 0) or 0)
+                if not units.get(name):
+                    units[name] = r.get('unit') or '개'
+        names = sorted([n for n, q in totals.items() if q > 0])
+        return [{'name': n, 'unit': units.get(n, '개') or '개'} for n in names]
+
+    def query_unit_for_product(self, product_name):
+        try:
+            res = self.client.table("stock_ledger").select("unit") \
+                .eq("product_name", product_name).limit(1).execute()
+            if res.data:
+                return res.data[0].get('unit') or ''
+            return None
+        except:
+            return None
+
+    def update_stock_ledger(self, row_id, update_data):
+        if self._db_cols:
+            update_data = {k: v for k, v in update_data.items() if k in self._db_cols}
+        self.client.table("stock_ledger").update(update_data).eq("id", row_id).execute()
+
+    def delete_stock_ledger_by_id(self, row_id):
+        self.client.table("stock_ledger").delete().eq("id", row_id).execute()
+
+    def delete_stock_ledger_sales_out(self, date_str, product_name, location, qty):
+        """특정 SALES_OUT 레코드 삭제 (거래 삭제 시 재고 복원용).
+
+        FIFO 차감으로 생성된 여러 레코드 중, 합계가 qty와 일치하는 것들을 삭제.
+        삭제되면 stock_ledger 기반 잔고가 자동 복원됨.
+        """
+        q = (self.client.table("stock_ledger").select("id,qty")
+             .eq("transaction_date", date_str)
+             .eq("type", "SALES_OUT")
+             .eq("product_name", product_name)
+             .eq("location", location))
+        res = q.execute()
+
+        if not res.data:
+            return 0
+
+        # qty 합산이 일치하는 레코드들 삭제 (SALES_OUT qty는 음수)
+        target_qty = -abs(qty)
+        candidates = sorted(res.data, key=lambda r: r['id'], reverse=True)
+
+        # 최신 레코드부터 합산하여 목표 수량에 맞는 그룹 찾기
+        to_delete = []
+        running = 0
+        for rec in candidates:
+            to_delete.append(rec['id'])
+            running += rec['qty']
+            if running == target_qty:
+                break
+
+        if running != target_qty:
+            # 정확히 일치하지 않으면 안전을 위해 삭제하지 않음
+            return 0
+
+        deleted = 0
+        for rid in to_delete:
+            self.client.table("stock_ledger").delete().eq("id", rid).execute()
+            deleted += 1
+        return deleted
+
+    # --- daily_revenue ---
+
+    def upsert_revenue(self, payload_list):
+        if not payload_list:
+            return
+        # channel 필드 없는 레코드에 기본값 보장
+        for p in payload_list:
+            if 'channel' not in p:
+                p['channel'] = ''
+        self.client.table("daily_revenue").upsert(
+            payload_list, on_conflict="revenue_date,product_name,category,channel"
+        ).execute()
+
+    def query_revenue(self, date_from=None, date_to=None, category=None, channel=None):
+        """매출 조회 (order_transactions + daily_revenue 합산).
+
+        - order_transactions: 온라인 채널 매출 (스마트스토어, 쿠팡, 자사몰, 카카오 등)
+        - daily_revenue: 거래처매출, 로켓 등 order_transactions에 없는 매출
+
+        반환 형식: revenue_date, product_name, category,
+            channel, qty, unit_price, revenue, settlement, commission
+        """
+        from services.channel_config import (
+            CHANNEL_REVENUE_MAP, normalize_channel_display,
+            DAILY_REVENUE_ONLY_CATEGORIES, DB_CUTOFF_DATE,
+            LEGACY_CATEGORY_TO_CHANNEL,
+        )
+
+        agg = {}
+
+        # ── 1. order_transactions (온라인 채널 매출) ──
+        # daily_revenue 전용 카테고리 필터 시에는 order_transactions 스킵
+        skip_ot = (category and category != "전체"
+                   and category in DAILY_REVENUE_ONLY_CATEGORIES)
+
+        if not skip_ot:
+            def ot_builder(table):
+                q = self.client.table(table).select(
+                    "order_date,channel,product_name,qty,unit_price,"
+                    "total_amount,settlement,commission,discount_amount,shipping_fee"
+                ).eq("status", "정상").order("order_date", desc=True)
+                if date_from:
+                    q = q.gte("order_date", date_from)
+                if date_to:
+                    q = q.lte("order_date", date_to)
+                if channel and channel != "전체":
+                    q = q.eq("channel", channel)
+                return q
+
+            ot_rows = self._paginate_query("order_transactions", ot_builder)
+
+            for r in ot_rows:
+                pn = (r.get("product_name") or "").replace(' ', '').strip()
+                if not pn:
+                    continue  # 상품명 없는 레코드 제외
+                ch = normalize_channel_display(r.get("channel", ""))
+                actual_cat = CHANNEL_REVENUE_MAP.get(ch, "일반매출")
+                if category and category != "전체" and actual_cat != category:
+                    continue
+
+                key = (r.get("order_date", ""), pn, ch)
+                if key not in agg:
+                    agg[key] = {
+                        "revenue_date": r.get("order_date", ""),
+                        "product_name": pn,
+                        "category": actual_cat,
+                        "channel": ch,
+                        "qty": 0, "revenue": 0, "settlement": 0,
+                        "commission": 0, "discount_amount": 0, "shipping_fee": 0,
+                    }
+                agg[key]["qty"] += (r.get("qty") or 0)
+                agg[key]["revenue"] += (r.get("total_amount") or 0)
+                agg[key]["settlement"] += (r.get("settlement") or 0)
+                agg[key]["commission"] += (r.get("commission") or 0)
+                agg[key]["discount_amount"] += (r.get("discount_amount") or 0)
+                agg[key]["shipping_fee"] += (r.get("shipping_fee") or 0)
+
+        # ── 2. daily_revenue ──
+        # DB 전환일(DB_CUTOFF_DATE) 이전: 모든 카테고리 조회 (레거시 데이터)
+        # DB 전환일 이후: 거래처매출/로켓만 조회 (온라인 채널은 order_transactions)
+        need_legacy = (not date_from or date_from < DB_CUTOFF_DATE)
+
+        dr_cats = DAILY_REVENUE_ONLY_CATEGORIES
+        if category and category != "전체":
+            if category not in dr_cats:
+                dr_cats = set()
+            else:
+                dr_cats = {category}
+
+        def dr_builder(table):
+            q = self.client.table(table).select(
+                "revenue_date,product_name,category,channel,"
+                "qty,unit_price,revenue"
+            ).order("revenue_date", desc=True)
+            if date_from:
+                q = q.gte("revenue_date", date_from)
+            if date_to:
+                q = q.lte("revenue_date", date_to)
+            return q
+
+        # 2-A. 레거시 데이터 (cutoff 이전, 모든 카테고리)
+        if need_legacy:
+            def dr_legacy_builder(table):
+                q = dr_builder(table).lt("revenue_date", DB_CUTOFF_DATE)
+                if category and category != "전체":
+                    # 채널명으로 필터: 레거시 카테고리 → 채널 역매핑
+                    rev_map = {v: k for k, v in LEGACY_CATEGORY_TO_CHANNEL.items()}
+                    legacy_cat = rev_map.get(category)
+                    if legacy_cat:
+                        q = q.eq("category", legacy_cat)
+                    elif category in DAILY_REVENUE_ONLY_CATEGORIES:
+                        q = q.eq("category", category)
+                return q
+
+            legacy_rows = self._paginate_query("daily_revenue", dr_legacy_builder)
+            for r in legacy_rows:
+                pn_dr = (r.get("product_name") or "").strip()
+                if not pn_dr:
+                    continue
+                cat = r.get("category", "기타")
+                # 레거시 카테고리 정규화 (N배송(용인) → N배송)
+                if cat == "N배송(용인)":
+                    cat = "N배송"
+                # 레거시 카테고리 → 현재 채널명 매핑
+                ch = LEGACY_CATEGORY_TO_CHANNEL.get(cat)
+                if not ch:
+                    ch = normalize_channel_display(r.get("channel", "") or cat)
+                key = (r.get("revenue_date", ""), pn_dr, ch)
+                if key not in agg:
+                    agg[key] = {
+                        "revenue_date": r.get("revenue_date", ""),
+                        "product_name": pn_dr,
+                        "category": cat,
+                        "channel": ch,
+                        "qty": 0, "revenue": 0, "settlement": 0,
+                        "commission": 0, "discount_amount": 0, "shipping_fee": 0,
+                    }
+                agg[key]["qty"] += (r.get("qty") or 0)
+                agg[key]["revenue"] += (r.get("revenue") or 0)
+
+        # 2-B. 전용 카테고리 (cutoff 이후, 거래처매출/로켓만)
+        if dr_cats:
+            def dr_current_builder(table):
+                q = dr_builder(table).gte("revenue_date", DB_CUTOFF_DATE)
+                if len(dr_cats) == 1:
+                    q = q.eq("category", list(dr_cats)[0])
+                else:
+                    q = q.in_("category", list(dr_cats))
+                return q
+
+            dr_rows = self._paginate_query("daily_revenue", dr_current_builder)
+            for r in dr_rows:
+                pn_dr = (r.get("product_name") or "").strip()
+                if not pn_dr:
+                    continue
+                cat = r.get("category", "기타")
+                # 레거시 카테고리 정규화 (N배송(용인) → N배송)
+                if cat == "N배송(용인)":
+                    cat = "N배송"
+                ch = normalize_channel_display(r.get("channel", "") or cat)
+                key = (r.get("revenue_date", ""), pn_dr, ch)
+                if key not in agg:
+                    agg[key] = {
+                        "revenue_date": r.get("revenue_date", ""),
+                        "product_name": pn_dr,
+                        "category": cat,
+                        "channel": ch,
+                        "qty": 0, "revenue": 0, "settlement": 0,
+                        "commission": 0, "discount_amount": 0, "shipping_fee": 0,
+                    }
+                agg[key]["qty"] += (r.get("qty") or 0)
+                agg[key]["revenue"] += (r.get("revenue") or 0)
+                agg[key]["settlement"] += (r.get("settlement") or 0)
+                agg[key]["commission"] += (r.get("commission") or 0)
+
+        result = sorted(agg.values(), key=lambda x: x["revenue_date"], reverse=True)
+        return result
+
+    def delete_revenue_all(self):
+        res = self.client.table("daily_revenue").delete().neq("id", 0).execute()
+        return len(res.data) if res.data else 0
+
+    def delete_revenue_by_date(self, date_from=None, date_to=None, exclude_categories=None):
+        query = self.client.table("daily_revenue").delete()
+        if date_from:
+            query = query.gte("revenue_date", date_from)
+        if date_to:
+            query = query.lte("revenue_date", date_to)
+        if exclude_categories:
+            for cat in exclude_categories:
+                query = query.neq("category", cat)
+        res = query.execute()
+        return len(res.data) if res.data else 0
+
+    def delete_revenue_by_id(self, revenue_id):
+        """daily_revenue 1건 삭제 (ID 기준)."""
+        self.client.table("daily_revenue").delete().eq("id", revenue_id).execute()
+
+    # --- daily_closing (일일마감) ---
+
+    def get_closing_status(self, closing_date, closing_type):
+        """특정 날짜+유형의 마감 상태 조회. None이면 미생성(open)."""
+        res = (self.client.table("daily_closing")
+               .select("*")
+               .eq("closing_date", closing_date)
+               .eq("closing_type", closing_type)
+               .limit(1).execute())
+        return res.data[0] if res.data else None
+
+    def is_closed(self, closing_date, closing_type):
+        """해당 날짜+유형이 마감되었는지 여부."""
+        row = self.get_closing_status(closing_date, closing_type)
+        return row is not None and row.get('status') == 'closed'
+
+    def close_day(self, closing_date, closing_type, closed_by, cutoff_time='15:05', memo=''):
+        """일일마감 실행."""
+        from datetime import datetime, timezone
+        payload = {
+            'closing_date': closing_date,
+            'closing_type': closing_type,
+            'status': 'closed',
+            'cutoff_time': cutoff_time,
+            'closed_by': closed_by,
+            'closed_at': datetime.now(timezone.utc).isoformat(),
+            'memo': memo,
+        }
+        self.client.table("daily_closing").upsert(
+            payload, on_conflict="closing_date,closing_type"
+        ).execute()
+
+    def reopen_day(self, closing_date, closing_type, reopened_by, memo=''):
+        """마감 해제 (재오픈)."""
+        from datetime import datetime, timezone
+        row = self.get_closing_status(closing_date, closing_type)
+        if not row:
+            return
+        self.client.table("daily_closing").update({
+            'status': 'open',
+            'reopened_by': reopened_by,
+            'reopened_at': datetime.now(timezone.utc).isoformat(),
+            'memo': memo,
+        }).eq("id", row['id']).execute()
+
+    def query_closing_list(self, date_from=None, date_to=None, closing_type=None):
+        """마감 이력 조회."""
+        q = self.client.table("daily_closing").select("*").order("closing_date", desc=True)
+        if date_from:
+            q = q.gte("closing_date", date_from)
+        if date_to:
+            q = q.lte("closing_date", date_to)
+        if closing_type:
+            q = q.eq("closing_type", closing_type)
+        res = q.limit(200).execute()
+        return res.data or []
+
+    # --- master tables ---
+
+    def sync_master_table(self, table_name, payload_list, batch_size=500):
+        self.client.table(table_name).delete().neq("id", 0).execute()
+        for i in range(0, len(payload_list), batch_size):
+            self.client.table(table_name).insert(payload_list[i:i + batch_size]).execute()
+
+    def query_master_table(self, table_name):
+        def builder(table):
+            return self.client.table(table).select("*")
+        return self._paginate_query(table_name, builder)
+
+    def count_master_table(self, table_name):
+        try:
+            res = self.client.table(table_name).select("id", count="exact").limit(1).execute()
+            return res.count if res.count is not None else len(res.data)
+        except:
+            return -1
+
+    def query_price_table(self, use_cache=True):
+        """가격표(master_prices) 전체 조회 → aggregator.price_map 호환 dict 반환. (캐시 적용)"""
+        import unicodedata
+        now = time.time()
+        if use_cache and _price_cache['data'] is not None and (now - _price_cache['ts']) < _price_cache['ttl']:
+            return _price_cache['data']
+
+        def _n(t): return unicodedata.normalize('NFC', str(t).strip())
+
+        rows = self.query_master_table('master_prices')
+        price_map = {}
+        for r in rows:
+            nm = _n(r.get('품목명', '') or r.get('product_name', ''))
+            if not nm:
+                continue
+            naver = float(r.get('네이버판매가', r.get('naver_price', 0)) or 0)
+            price_map[nm] = {
+                'SKU': str(r.get('SKU', r.get('sku', ''))),
+                '네이버판매가': naver,
+                '자사몰판매가': float(r.get('자사몰판매가', r.get('jasa_price', 0)) or 0) or naver,
+                '쿠팡판매가': float(r.get('쿠팡판매가', r.get('coupang_price', 0)) or 0),
+                '로켓판매가': float(r.get('로켓판매가', r.get('rocket_price', 0)) or 0),
+            }
+
+        _price_cache['data'] = price_map
+        _price_cache['ts'] = now
+        return price_map
+
+    # --- product_costs (품목별 단가: 매입/생산 구분) ---
+
+    def query_product_costs(self):
+        """product_costs 전체 조회 → {product_name: {cost_price, unit, memo, cost_type, weight, weight_unit}} dict."""
+        try:
+            rows = self._paginate_query("product_costs",
+                lambda t: self.client.table(t).select("*").order("product_name"))
+            return {r['product_name']: r for r in rows}
+        except Exception:
+            return {}
+
+    def upsert_product_cost(self, product_name, cost_price, unit='', memo='',
+                            weight=0, weight_unit='g', cost_type='매입',
+                            material_type='원료',
+                            purchase_unit='', standard_unit='',
+                            conversion_ratio=1, food_type=''):
+        """품목 단가 1건 등록/수정 (upsert).
+        cost_type: '매입' = 원재료 매입단가, '생산' = 완제품 생산단가
+        material_type: '원료', '부재료', '반제품', '완제품', '포장재'
+        purchase_unit: 매입단위 (박스, 포대, kg 등)
+        standard_unit: 사용단위 (g, 개, kg 등)
+        conversion_ratio: 1 매입단위 = X 사용단위
+        food_type: '농산물', '수산물', '축산물', '' (미지정)
+        """
+        from datetime import datetime, timezone
+        product_name = str(product_name).replace(' ', '').strip()
+        payload = {
+            'product_name': product_name,
+            'cost_price': float(cost_price),
+            'unit': unit,
+            'memo': memo,
+            'weight': float(weight or 0),
+            'weight_unit': weight_unit or 'g',
+            'cost_type': cost_type or '매입',
+            'material_type': material_type or '원료',
+            'purchase_unit': purchase_unit or '',
+            'standard_unit': standard_unit or '',
+            'conversion_ratio': float(conversion_ratio or 1),
+            'food_type': food_type or '',
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        }
+        self.client.table("product_costs").upsert(
+            payload, on_conflict="product_name"
+        ).execute()
+
+    def upsert_product_costs_batch(self, items):
+        """품목 단가 일괄 등록/수정.
+        items: [{product_name, cost_price, unit?, memo?, weight?, weight_unit?,
+                 cost_type?, material_type?, purchase_unit?, standard_unit?,
+                 conversion_ratio?, food_type?}]
+        """
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        payload = []
+        for item in items:
+            payload.append({
+                'product_name': str(item['product_name']).replace(' ', '').strip(),
+                'cost_price': float(item.get('cost_price', 0)),
+                'unit': item.get('unit', ''),
+                'memo': item.get('memo', ''),
+                'weight': float(item.get('weight', 0) or 0),
+                'weight_unit': item.get('weight_unit', 'g') or 'g',
+                'cost_type': item.get('cost_type', '매입') or '매입',
+                'material_type': item.get('material_type', '원료') or '원료',
+                'purchase_unit': item.get('purchase_unit', '') or '',
+                'standard_unit': item.get('standard_unit', '') or '',
+                'conversion_ratio': float(item.get('conversion_ratio', 1) or 1),
+                'food_type': item.get('food_type', '') or '',
+                'updated_at': now,
+            })
+        if not payload:
+            return
+        for i in range(0, len(payload), 500):
+            self.client.table("product_costs").upsert(
+                payload[i:i + 500], on_conflict="product_name"
+            ).execute()
+
+    def delete_product_cost(self, product_name):
+        """품목 매입단가 1건 삭제."""
+        self.client.table("product_costs").delete().eq(
+            "product_name", product_name
+        ).execute()
+
+    # --- channel_costs (채널별 비용) ---
+
+    def query_channel_costs(self):
+        """채널별 비용 전체 조회 → {channel: {fee_rate, shipping, packaging, other_cost, memo}}."""
+        try:
+            rows = self._paginate_query("channel_costs",
+                lambda t: self.client.table(t).select("*").order("channel"))
+            return {r['channel']: r for r in rows}
+        except Exception:
+            return {}
+
+    def upsert_channel_cost(self, channel, fee_rate=0, shipping=0,
+                            packaging=0, other_cost=0, memo=''):
+        """채널 비용 1건 등록/수정 (upsert on channel)."""
+        from datetime import datetime, timezone
+        payload = {
+            'channel': channel,
+            'fee_rate': float(fee_rate),
+            'shipping': float(shipping),
+            'packaging': float(packaging),
+            'other_cost': float(other_cost),
+            'memo': memo,
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+        }
+        self.client.table("channel_costs").upsert(
+            payload, on_conflict="channel"
+        ).execute()
+
+    def delete_channel_cost(self, channel):
+        """채널 비용 1건 삭제."""
+        self.client.table("channel_costs").delete().eq(
+            "channel", channel
+        ).execute()
+
+    # --- business_partners ---
+
+    def query_partners(self):
+        """거래처 전체 조회 (이름순)."""
+        def builder(table):
+            return self.client.table(table).select("*").order("partner_name")
+        return self._paginate_query("business_partners", builder)
+
+    def insert_partner(self, payload):
+        """거래처 1건 등록."""
+        self.client.table("business_partners").insert(payload).execute()
+
+    def insert_partners_batch(self, payload_list):
+        """거래처 엑셀 일괄 등록."""
+        if not payload_list:
+            return
+        for i in range(0, len(payload_list), 500):
+            self.client.table("business_partners").insert(
+                payload_list[i:i + 500]).execute()
+
+    def delete_partner(self, partner_id):
+        """거래처 1건 삭제."""
+        self.client.table("business_partners").delete().eq("id", partner_id).execute()
+
+    def update_partner(self, partner_id, payload):
+        """거래처 1건 수정."""
+        self.client.table("business_partners").update(payload).eq("id", partner_id).execute()
+
+    # --- my_business ---
+
+    def query_my_business(self):
+        """내 사업장 전체 조회."""
+        def builder(table):
+            return self.client.table(table).select("*").order("id")
+        return self._paginate_query("my_business", builder)
+
+    def upsert_my_business(self, payload):
+        """내 사업장 등록/수정."""
+        self.client.table("my_business").upsert(payload).execute()
+
+    def delete_my_business(self, biz_id):
+        """내 사업장 삭제."""
+        self.client.table("my_business").delete().eq("id", biz_id).execute()
+
+    def set_default_business(self, biz_id):
+        """기본 사업장 지정 (나머지 해제)."""
+        all_biz = self.query_my_business()
+        for b in all_biz:
+            self.client.table("my_business").update(
+                {"is_default": b["id"] == biz_id}
+            ).eq("id", b["id"]).execute()
+
+    def query_default_business(self):
+        """기본 사업장 1건 반환. 없으면 첫 번째 레코드."""
+        all_biz = self.query_my_business()
+        if not all_biz:
+            return {}
+        for b in all_biz:
+            if b.get("is_default"):
+                return b
+        return all_biz[0]
+
+    # --- manual_trades ---
+
+    def query_manual_trades(self, date_from=None, date_to=None, partner_name=None):
+        """수동 거래 조회 (날짜/거래처 필터)."""
+        def builder(table):
+            q = self.client.table(table).select("*").order("trade_date", desc=True)
+            if date_from:
+                q = q.gte("trade_date", date_from)
+            if date_to:
+                q = q.lte("trade_date", date_to)
+            if partner_name and partner_name != "전체":
+                q = q.eq("partner_name", partner_name)
+            return q
+        return self._paginate_query("manual_trades", builder)
+
+    def insert_manual_trade(self, payload):
+        """수동 거래 1건 등록."""
+        self.client.table("manual_trades").insert(payload).execute()
+
+    def query_manual_trade_by_id(self, trade_id):
+        """수동 거래 1건 조회 (ID 기준)."""
+        res = self.client.table("manual_trades").select("*").eq("id", trade_id).execute()
+        return res.data[0] if res.data else None
+
+    def delete_manual_trade(self, trade_id):
+        """수동 거래 1건 삭제."""
+        self.client.table("manual_trades").delete().eq("id", trade_id).execute()
+
+    def delete_revenue_specific(self, revenue_date, product_name, category):
+        """daily_revenue에서 특정 조건의 레코드 삭제."""
+        res = (self.client.table("daily_revenue")
+               .delete()
+               .eq("revenue_date", revenue_date)
+               .eq("product_name", product_name)
+               .eq("category", category)
+               .execute())
+        return len(res.data) if res.data else 0
+
+    # --- 발주서 이력 ---
+
+    def insert_purchase_order(self, payload):
+        """발주서 1건 저장."""
+        self.client.table("purchase_orders").insert(payload).execute()
+
+    def query_purchase_orders(self, date_from=None, date_to=None, partner_name=None):
+        """발주서 이력 조회 (날짜/거래처 필터)."""
+        def builder(table):
+            q = self.client.table(table).select("*").order("order_date", desc=True)
+            if date_from:
+                q = q.gte("order_date", date_from)
+            if date_to:
+                q = q.lte("order_date", date_to)
+            if partner_name and partner_name != "전체":
+                q = q.eq("partner_name", partner_name)
+            return q
+        return self._paginate_query("purchase_orders", builder)
+
+    def query_purchase_order_by_id(self, po_id):
+        """발주서 1건 조회 (ID 기준)."""
+        res = self.client.table("purchase_orders").select("*").eq("id", po_id).execute()
+        return res.data[0] if res.data else None
+
+    def update_purchase_order(self, po_id, update_data):
+        """발주서 1건 수정."""
+        self.client.table("purchase_orders").update(update_data).eq("id", po_id).execute()
+
+    def delete_purchase_order(self, po_id):
+        """발주서 1건 삭제."""
+        self.client.table("purchase_orders").delete().eq("id", po_id).execute()
+
+    # --- 품목명 공백 정리 ---
+
+    def fix_product_name_spaces(self):
+        """stock_ledger + daily_revenue의 품목명에서 공백을 제거하여 통합.
+        예: '(수)건해삼채 200g' → '(수)건해삼채200g'
+        returns: (fixed_count, duplicate_groups) 수정된 건수와 중복 그룹 목록
+        """
+        # stock_ledger
+        all_rows = self._paginate_query("stock_ledger",
+            lambda t: self.client.table(t).select("id,product_name"))
+        fixed = 0
+        dupes = {}
+        for r in all_rows:
+            pn = r.get('product_name', '')
+            norm = str(pn).replace(' ', '').strip()
+            if norm != pn:
+                # 공백이 있는 이름 → 정규화된 이름으로 UPDATE
+                self.client.table("stock_ledger").update(
+                    {"product_name": norm}).eq("id", r['id']).execute()
+                fixed += 1
+                if norm not in dupes:
+                    dupes[norm] = set()
+                dupes[norm].add(pn)
+                dupes[norm].add(norm)
+
+        # daily_revenue
+        rev_rows = self._paginate_query("daily_revenue",
+            lambda t: self.client.table(t).select("id,product_name"))
+        for r in rev_rows:
+            pn = r.get('product_name', '')
+            norm = str(pn).replace(' ', '').strip()
+            if norm != pn:
+                self.client.table("daily_revenue").update(
+                    {"product_name": norm}).eq("id", r['id']).execute()
+                fixed += 1
+
+        return fixed, dupes
+
+    # ================================================================
+    # 옵션마스터 (option_master) CRUD
+    # ================================================================
+
+    def _invalidate_option_cache(self):
+        """옵션마스터 캐시 무효화 (데이터 변경 시 호출)."""
+        _option_cache['data'] = None
+        _option_cache['data_list'] = None
+        _option_cache['ts'] = 0
+
+    def query_option_master(self, use_cache=True):
+        """옵션마스터 전체 조회 (sort_order 정렬, 메모리 캐시 적용)."""
+        now = time.time()
+        if use_cache and _option_cache['data'] is not None and (now - _option_cache['ts']) < _option_cache['ttl']:
+            return _option_cache['data']
+
+        def builder(table):
+            return self.client.table(table).select("*").order("sort_order")
+        data = self._paginate_query("option_master", builder)
+
+        # 캐시 갱신
+        _option_cache['data'] = data
+        _option_cache['data_list'] = None  # list 캐시도 다시 생성
+        _option_cache['ts'] = now
+        return data
+
+    def query_option_master_as_list(self):
+        """옵션마스터를 OrderProcessor 호환 dict list로 반환 (캐시)."""
+        # list 캐시가 유효하면 바로 반환
+        now = time.time()
+        if _option_cache['data_list'] is not None and (now - _option_cache['ts']) < _option_cache['ttl']:
+            return _option_cache['data_list']
+
+        all_rows = self.query_option_master()
+        result = []
+        for r in all_rows:
+            result.append({
+                '원문명': r.get('original_name', ''),
+                '품목명': r.get('product_name', ''),
+                '라인코드': r.get('line_code', '0'),
+                '출력순서': float(r.get('sort_order', 999)),
+                '바코드': r.get('barcode', ''),
+                'Key': r.get('match_key', ''),
+            })
+        _option_cache['data_list'] = result
+        return result
+
+    def search_option_master(self, keyword):
+        """옵션마스터 검색 (품목명 or 원문명 부분 일치, 캐시 활용)."""
+        keyword_upper = keyword.replace(' ', '').upper()
+        all_rows = self.query_option_master()  # 캐시 사용
+        return [r for r in all_rows
+                if keyword_upper in (r.get('match_key', '') or '').upper()
+                or keyword_upper in (r.get('product_name', '') or '').replace(' ', '').upper()]
+
+    def insert_option_master(self, payload):
+        """옵션마스터 1건 등록/갱신 (match_key 자동 계산, 중복 시 upsert)."""
+        orig = payload.get('original_name', '')
+        payload['match_key'] = str(orig).replace(' ', '').upper()
+        self.client.table("option_master").upsert(
+            payload, on_conflict="match_key"
+        ).execute()
+        self._invalidate_option_cache()
+
+    def insert_option_master_batch(self, payload_list, batch_size=500):
+        """옵션마스터 일괄 등록 (중복 시 upsert)."""
+        for row in payload_list:
+            orig = row.get('original_name', '')
+            row['match_key'] = str(orig).replace(' ', '').upper()
+        for i in range(0, len(payload_list), batch_size):
+            chunk = payload_list[i:i + batch_size]
+            try:
+                self.client.table("option_master").upsert(
+                    chunk, on_conflict="match_key"
+                ).execute()
+            except Exception:
+                for row in chunk:
+                    try:
+                        self.client.table("option_master").upsert(
+                            row, on_conflict="match_key"
+                        ).execute()
+                    except Exception:
+                        pass
+        self._invalidate_option_cache()
+
+    def update_option_master(self, option_id, update_data):
+        """옵션마스터 1건 수정."""
+        if 'original_name' in update_data:
+            update_data['match_key'] = str(update_data['original_name']).replace(' ', '').upper()
+        self.client.table("option_master").update(update_data).eq("id", option_id).execute()
+        self._invalidate_option_cache()
+
+    def delete_option_master(self, option_id):
+        """옵션마스터 1건 삭제."""
+        self.client.table("option_master").delete().eq("id", option_id).execute()
+        self._invalidate_option_cache()
+
+    def count_option_master(self):
+        """옵션마스터 건수 (캐시 활용)."""
+        cached = _option_cache.get('data')
+        if cached is not None and (time.time() - _option_cache['ts']) < _option_cache['ttl']:
+            return len(cached)
+        try:
+            res = self.client.table("option_master").select("id", count="exact").limit(1).execute()
+            return res.count if res.count is not None else len(res.data)
+        except Exception:
+            return -1
+
+    def sync_option_master(self, payload_list, batch_size=500):
+        """옵션마스터 전체 교체 (엑셀 내 중복 match_key 자동 제거)."""
+        # match_key 생성 + 중복 제거 (뒤에 나오는 행이 우선)
+        seen = {}
+        for row in payload_list:
+            orig = row.get('original_name', '')
+            row['match_key'] = str(orig).replace(' ', '').upper()
+            seen[row['match_key']] = row
+        deduped = list(seen.values())
+
+        # 기존 데이터 전체 삭제 후 삽입
+        self.client.table("option_master").delete().neq("id", 0).execute()
+        for i in range(0, len(deduped), batch_size):
+            self.client.table("option_master").insert(
+                deduped[i:i + batch_size]
+            ).execute()
+        self._invalidate_option_cache()
+
+    def touch_option_matched(self, match_keys):
+        """매칭 성공한 옵션들의 last_matched_at 타임스탬프 갱신."""
+        if not match_keys:
+            return 0
+        from datetime import datetime, timezone
+        now_str = datetime.now(timezone.utc).isoformat()
+        updated = 0
+        for i in range(0, len(match_keys), 50):
+            chunk = match_keys[i:i + 50]
+            try:
+                self.client.table("option_master").update(
+                    {"last_matched_at": now_str}
+                ).in_("match_key", chunk).execute()
+                updated += len(chunk)
+            except Exception:
+                for mk in chunk:
+                    try:
+                        self.client.table("option_master").update(
+                            {"last_matched_at": now_str}
+                        ).eq("match_key", mk).execute()
+                        updated += 1
+                    except Exception:
+                        pass
+        self._invalidate_option_cache()
+        return updated
+
+    def query_stale_options(self, days=30):
+        """N일 이상 매칭되지 않은 옵션 조회 (last_matched_at이 NULL이거나 오래된 것)."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        stale = []
+        try:
+            # last_matched_at이 NULL인 항목 (한 번도 매칭 안 됨)
+            res1 = self.client.table("option_master").select("*") \
+                .is_("last_matched_at", "null").execute()
+            stale.extend(res1.data or [])
+            # last_matched_at이 cutoff보다 오래된 항목
+            res2 = self.client.table("option_master").select("*") \
+                .lt("last_matched_at", cutoff).execute()
+            stale.extend(res2.data or [])
+        except Exception:
+            pass
+        # 중복 제거 (id 기준)
+        seen = set()
+        result = []
+        for r in stale:
+            if r['id'] not in seen:
+                seen.add(r['id'])
+                result.append(r)
+        return result
+
+    def delete_stale_options(self, days=30):
+        """N일 이상 매칭되지 않은 옵션 일괄 삭제."""
+        stale = self.query_stale_options(days)
+        if not stale:
+            return 0
+        ids = [r['id'] for r in stale]
+        deleted = 0
+        for i in range(0, len(ids), 50):
+            chunk = ids[i:i + 50]
+            try:
+                self.client.table("option_master").delete() \
+                    .in_("id", chunk).execute()
+                deleted += len(chunk)
+            except Exception:
+                for rid in chunk:
+                    try:
+                        self.client.table("option_master").delete() \
+                            .eq("id", rid).execute()
+                        deleted += 1
+                    except Exception:
+                        pass
+        self._invalidate_option_cache()
+        return deleted
+
+    # ================================================================
+    # 사용자 관리 (app_users) CRUD
+    # ================================================================
+
+    def query_user_by_id(self, user_id):
+        """ID로 사용자 조회. dict or None."""
+        try:
+            res = self.client.table("app_users").select("*") \
+                .eq("id", user_id).limit(1).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def query_user_by_username(self, username):
+        """username으로 사용자 조회. dict or None."""
+        try:
+            res = self.client.table("app_users").select("*") \
+                .eq("username", username).limit(1).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def insert_user(self, payload):
+        """사용자 등록."""
+        self.client.table("app_users").insert(payload).execute()
+
+    def update_user(self, user_id, update_data):
+        """사용자 정보 수정."""
+        self.client.table("app_users").update(update_data) \
+            .eq("id", user_id).execute()
+
+    def query_all_users(self):
+        """전체 사용자 목록."""
+        def builder(table):
+            return self.client.table(table).select("*").order("created_at", desc=True)
+        return self._paginate_query("app_users", builder)
+
+    def count_pending_users(self):
+        """승인 대기 사용자 수."""
+        try:
+            res = self.client.table("app_users").select("id", count="exact") \
+                .eq("is_approved", False).eq("is_active_user", True).execute()
+            return res.count if res.count is not None else len(res.data)
+        except Exception:
+            return 0
+
+    # ================================================================
+    # 감사 로그 (audit_logs)
+    # ================================================================
+
+    def insert_audit_log(self, payload):
+        """감사 로그 기록 (old_value/new_value JSON 지원)."""
+        import json
+        # JSONB 필드는 dict → JSON string 변환
+        for key in ('old_value', 'new_value'):
+            if key in payload and payload[key] is not None:
+                if isinstance(payload[key], (dict, list)):
+                    payload[key] = json.dumps(payload[key], ensure_ascii=False)
+        self.client.table("audit_logs").insert(payload).execute()
+
+    def query_audit_logs(self, page=1, per_page=50, action_filter=None,
+                         user_filter=None, date_from=None, date_to=None):
+        """감사 로그 페이지네이션 조회 (필터 지원). returns (items, total_count)."""
+        try:
+            # 전체 건수 (필터 적용)
+            count_q = self.client.table("audit_logs").select("id", count="exact")
+            if action_filter:
+                count_q = count_q.ilike("action", f"%{action_filter}%")
+            if user_filter:
+                count_q = count_q.ilike("user_name", f"%{user_filter}%")
+            if date_from:
+                count_q = count_q.gte("created_at", date_from)
+            if date_to:
+                count_q = count_q.lte("created_at", date_to + 'T23:59:59')
+            count_res = count_q.limit(1).execute()
+            total = count_res.count if count_res.count is not None else 0
+
+            # 페이지 데이터
+            offset = (page - 1) * per_page
+            data_q = self.client.table("audit_logs").select("*") \
+                .order("created_at", desc=True)
+            if action_filter:
+                data_q = data_q.ilike("action", f"%{action_filter}%")
+            if user_filter:
+                data_q = data_q.ilike("user_name", f"%{user_filter}%")
+            if date_from:
+                data_q = data_q.gte("created_at", date_from)
+            if date_to:
+                data_q = data_q.lte("created_at", date_to + 'T23:59:59')
+            data_res = data_q.range(offset, offset + per_page - 1).execute()
+            items = data_res.data or []
+
+            return items, total
+        except Exception:
+            return [], 0
+
+    def query_audit_log_by_id(self, log_id):
+        """감사 로그 1건 조회."""
+        try:
+            res = self.client.table("audit_logs").select("*") \
+                .eq("id", log_id).limit(1).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def update_audit_log(self, log_id, update_data):
+        """감사 로그 수정 (롤백 상태 기록용)."""
+        self.client.table("audit_logs").update(update_data) \
+            .eq("id", log_id).execute()
+
+    # --- 소프트 삭제 지원 ---
+
+    def soft_delete_stock_ledger(self, row_id, deleted_by=None):
+        """stock_ledger 소프트 삭제 (is_deleted=True). 원본 데이터 보존."""
+        from datetime import datetime, timezone
+        update = {
+            'is_deleted': True,
+            'deleted_at': datetime.now(timezone.utc).isoformat(),
+        }
+        if deleted_by:
+            update['deleted_by'] = deleted_by
+        self.client.table("stock_ledger").update(update) \
+            .eq("id", row_id).execute()
+
+    def restore_stock_ledger(self, row_id):
+        """stock_ledger 소프트 삭제 복원."""
+        self.client.table("stock_ledger").update({
+            'is_deleted': False,
+            'deleted_at': None,
+            'deleted_by': None,
+        }).eq("id", row_id).execute()
+
+    def query_stock_ledger_by_id(self, row_id):
+        """stock_ledger 1건 조회 (ID 기준)."""
+        try:
+            res = self.client.table("stock_ledger").select("*") \
+                .eq("id", row_id).limit(1).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    # ================================================================
+    # 권한 관리 (role_permissions)
+    # ================================================================
+
+    def query_role_permissions(self, use_cache=True):
+        """권한 전체 조회 → {role: {page_key: bool}}. TTL 캐시."""
+        now = time.time()
+        if use_cache and _perm_cache['data'] and (now - _perm_cache['ts']) < _perm_cache['ttl']:
+            return _perm_cache['data']
+        try:
+            res = self.client.table("role_permissions").select("role,page_key,is_allowed").execute()
+            perms = {}
+            for row in (res.data or []):
+                role = row['role']
+                if role not in perms:
+                    perms[role] = {}
+                perms[role][row['page_key']] = row['is_allowed']
+            _perm_cache['data'] = perms
+            _perm_cache['ts'] = time.time()
+            return perms
+        except Exception:
+            return _perm_cache['data'] or {}
+
+    def upsert_role_permissions(self, role, perms_dict):
+        """한 역할의 권한 일괄 저장. perms_dict = {page_key: bool}."""
+        from datetime import datetime, timezone
+        now_str = datetime.now(timezone.utc).isoformat()
+        payload = [
+            {'role': role, 'page_key': pk, 'is_allowed': allowed, 'updated_at': now_str}
+            for pk, allowed in perms_dict.items()
+        ]
+        if payload:
+            self.client.table("role_permissions").upsert(
+                payload, on_conflict="role,page_key"
+            ).execute()
+        self._invalidate_perm_cache()
+
+    def seed_default_permissions(self, page_registry):
+        """테이블이 비어있으면 PAGE_REGISTRY 기본값으로 초기화."""
+        try:
+            res = self.client.table("role_permissions").select("id").limit(1).execute()
+            if res.data:
+                return  # 이미 데이터 있음
+        except Exception:
+            return
+        from datetime import datetime, timezone
+        from config import Config
+        now_str = datetime.now(timezone.utc).isoformat()
+        payload = []
+        for page_key, name, icon, url, default_roles, *_ in page_registry:
+            for role in Config.ROLES.keys():
+                payload.append({
+                    'role': role,
+                    'page_key': page_key,
+                    'is_allowed': role in default_roles,
+                    'updated_at': now_str,
+                })
+        # 500건씩 배치 upsert
+        for i in range(0, len(payload), 500):
+            self.client.table("role_permissions").upsert(
+                payload[i:i+500], on_conflict="role,page_key"
+            ).execute()
+        self._invalidate_perm_cache()
+
+    def _invalidate_perm_cache(self):
+        """권한 캐시 즉시 무효화."""
+        _perm_cache['data'] = None
+        _perm_cache['ts'] = 0
+
+    # ================================================================
+    # 행사 관리 (promotions)
+    # ================================================================
+
+    def query_promotions(self, product_name=None, category=None,
+                         date_from=None, date_to=None, active_only=False):
+        """행사 목록 조회."""
+        try:
+            q = self.client.table("promotions").select("*")
+            if product_name:
+                q = q.ilike("product_name", f"%{product_name}%")
+            if category:
+                q = q.eq("category", category)
+            if date_from:
+                q = q.gte("end_date", date_from)
+            if date_to:
+                q = q.lte("start_date", date_to)
+            if active_only:
+                q = q.eq("is_active", True)
+            q = q.order("start_date", desc=True)
+            res = q.execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    def query_active_promotion(self, product_name, category, target_date):
+        """특정 품목+채널+일자에 활성 행사 조회 (가장 최근 등록 우선)."""
+        try:
+            res = self.client.table("promotions").select("*") \
+                .eq("product_name", product_name) \
+                .eq("category", category) \
+                .eq("is_active", True) \
+                .lte("start_date", target_date) \
+                .gte("end_date", target_date) \
+                .order("created_at", desc=True) \
+                .limit(1).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def insert_promotion(self, payload):
+        """행사 1건 등록."""
+        self.client.table("promotions").insert(payload).execute()
+
+    def update_promotion(self, promo_id, update_data):
+        """행사 1건 수정."""
+        from datetime import datetime, timezone
+        update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        self.client.table("promotions").update(update_data) \
+            .eq("id", promo_id).execute()
+
+    def delete_promotion(self, promo_id):
+        """행사 1건 삭제."""
+        self.client.table("promotions").delete().eq("id", promo_id).execute()
+
+    # ================================================================
+    # 쿠폰 관리 (coupons)
+    # ================================================================
+
+    def query_coupons(self, product_name=None, category=None,
+                      date_from=None, date_to=None, active_only=False):
+        """쿠폰 목록 조회."""
+        try:
+            q = self.client.table("coupons").select("*")
+            if product_name:
+                q = q.ilike("product_name", f"%{product_name}%")
+            if category:
+                q = q.eq("category", category)
+            if date_from:
+                q = q.gte("end_date", date_from)
+            if date_to:
+                q = q.lte("start_date", date_to)
+            if active_only:
+                q = q.eq("is_active", True)
+            q = q.order("start_date", desc=True)
+            res = q.execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    def query_active_coupon(self, product_name, category, target_date):
+        """특정 품목+채널+일자에 활성 쿠폰 조회."""
+        try:
+            res = self.client.table("coupons").select("*") \
+                .eq("product_name", product_name) \
+                .eq("category", category) \
+                .eq("is_active", True) \
+                .lte("start_date", target_date) \
+                .gte("end_date", target_date) \
+                .order("created_at", desc=True) \
+                .limit(1).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def insert_coupon(self, payload):
+        """쿠폰 1건 등록."""
+        self.client.table("coupons").insert(payload).execute()
+
+    def update_coupon(self, coupon_id, update_data):
+        """쿠폰 1건 수정."""
+        from datetime import datetime, timezone
+        update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        self.client.table("coupons").update(update_data) \
+            .eq("id", coupon_id).execute()
+
+    def delete_coupon(self, coupon_id):
+        """쿠폰 1건 삭제."""
+        self.client.table("coupons").delete().eq("id", coupon_id).execute()
+
+    # ================================================================
+    # 단가 결정 (행사 > 쿠폰 > 기본가)
+    # ================================================================
+
+    def resolve_unit_price(self, product_name, category, target_date, price_map=None):
+        """매출 단가 결정: 행사가 > 쿠폰할인가 > 기본 판매가.
+        Returns: (unit_price, source) — source: 'promotion'/'coupon'/'master'/'none'
+        """
+        import unicodedata
+        _CATEGORY_PRICE_COL = {
+            "일반매출": "네이버판매가",
+            "자사몰매출": "자사몰판매가",
+            "쿠팡매출": "쿠팡판매가",
+            "로켓": "로켓판매가",
+            "N배송": "네이버판매가",
+        }
+
+        # 공백 정규화된 이름 (가격표 조회용)
+        norm_name = unicodedata.normalize('NFC', str(product_name).replace(' ', '').strip())
+
+        def _price_lookup(pn, col):
+            if not price_map or not col:
+                return 0
+            entry = price_map.get(pn) or price_map.get(norm_name) or {}
+            return float(entry.get(col, 0) or 0)
+
+        # 1) 행사가 확인
+        promo = self.query_active_promotion(product_name, category, target_date)
+        if promo:
+            return float(promo['promo_price']), 'promotion'
+
+        # 2) 쿠폰 확인
+        coupon = self.query_active_coupon(product_name, category, target_date)
+        if coupon:
+            price_col = _CATEGORY_PRICE_COL.get(category)
+            base_price = _price_lookup(product_name, price_col)
+            if base_price > 0:
+                if coupon['discount_type'] == '%':
+                    discount = base_price * float(coupon['discount_value']) / 100
+                else:
+                    discount = float(coupon['discount_value'])
+                return max(0, base_price - discount), 'coupon'
+
+        # 3) 기본 판매가
+        price_col = _CATEGORY_PRICE_COL.get(category)
+        base_price = _price_lookup(product_name, price_col)
+        if base_price > 0:
+            return base_price, 'master'
+
+        return 0, 'none'
+
+    # ================================================================
+    # Phase 1: 주문 수집 파이프라인
+    # ================================================================
+
+    def create_import_run(self, channel, filename, file_hash, uploaded_by, total_rows):
+        """import_runs 레코드 생성. 반환: (import_run_id, error_msg)"""
+        try:
+            res = self.client.table("import_runs").insert({
+                "channel": channel,
+                "filename": filename,
+                "file_hash": file_hash,
+                "uploaded_by": uploaded_by,
+                "total_rows": total_rows,
+                "status": "processing",
+            }).execute()
+            if res.data:
+                return res.data[0]["id"], None
+            return None, "INSERT OK but no ID returned"
+        except Exception as e:
+            print(f"[DB] create_import_run error: {e}")
+            return None, str(e)
+
+    def update_import_run(self, run_id, update_data):
+        """import_runs 결과 갱신."""
+        try:
+            self.client.table("import_runs").update(update_data) \
+                .eq("id", run_id).execute()
+        except Exception as e:
+            print(f"[DB] update_import_run error: {e}")
+
+    def query_import_runs(self, limit=50):
+        """최근 import_runs 목록 조회."""
+        try:
+            res = self.client.table("import_runs").select("*") \
+                .order("created_at", desc=True).limit(limit).execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    def query_import_run_by_id(self, run_id):
+        """import_runs 상세 조회."""
+        try:
+            res = self.client.table("import_runs").select("*") \
+                .eq("id", run_id).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def upsert_order_batch(self, import_run_id, orders):
+        """주문 배치 upsert (RPC 호출).
+        orders: [{transaction: {...}, shipping: {...}}, ...]
+        반환: {inserted, updated, skipped, failed, errors, rpc_error}
+        """
+        import json
+        try:
+            res = self.client.rpc("rpc_upsert_order_batch", {
+                "p_import_run_id": import_run_id,
+                "p_orders": orders,
+            }).execute()
+            if res.data:
+                return res.data
+            return {"inserted": 0, "updated": 0, "skipped": 0, "failed": len(orders),
+                    "rpc_error": "RPC OK but no data returned"}
+        except Exception as e:
+            rpc_err = str(e)
+            print(f"[DB] upsert_order_batch RPC error: {rpc_err}")
+            # RPC 실패 시 fallback: 개별 upsert (REST API)
+            result = self._upsert_order_batch_fallback(import_run_id, orders)
+            result["rpc_error"] = rpc_err
+            return result
+
+    def _upsert_order_batch_fallback(self, import_run_id, orders):
+        """RPC 실패 시 REST API 배치 upsert (최적화: 50건씩 배치 처리)."""
+        inserted, updated, skipped, failed = 0, 0, 0, 0
+        errors = []
+        from datetime import datetime, timedelta, timezone
+
+        BATCH = 50
+        for batch_start in range(0, len(orders), BATCH):
+            batch = orders[batch_start:batch_start + BATCH]
+
+            # 1단계: 배치 내 기존 주문 한번에 조회 (채널별 .in_() 사용)
+            by_channel = {}
+            for order in batch:
+                txn = order.get("transaction", {})
+                ch = txn.get("channel", "")
+                ono = txn.get("order_no", "")
+                by_channel.setdefault(ch, set()).add(ono)
+
+            existing_map = {}  # (channel, order_no, line_no) → {id, raw_hash, status}
+            for ch, order_nos in by_channel.items():
+                try:
+                    res = self.client.table("order_transactions") \
+                        .select("id,channel,order_no,line_no,raw_hash,status") \
+                        .eq("channel", ch) \
+                        .in_("order_no", list(order_nos)) \
+                        .execute()
+                    for rec in (res.data or []):
+                        key = (rec.get('channel', ''), rec.get('order_no', ''), rec.get('line_no', 1))
+                        existing_map[key] = rec
+                except Exception as e:
+                    print(f"[DB] fallback batch lookup error: {e}")
+
+            # 1-b단계: 크로스 채널 중복 체크 (raw_hash + order_no 양방향)
+            batch_hashes = [o.get("transaction", {}).get("raw_hash", "") for o in batch]
+            batch_hashes = [h for h in batch_hashes if h]
+            cross_channel_hashes = {}  # raw_hash → 기존 채널명
+            if batch_hashes:
+                for hi in range(0, len(batch_hashes), 200):
+                    h_chunk = batch_hashes[hi:hi + 200]
+                    try:
+                        xres = self.client.table("order_transactions") \
+                            .select("raw_hash,channel") \
+                            .in_("raw_hash", h_chunk) \
+                            .execute()
+                        for xr in (xres.data or []):
+                            cross_channel_hashes[xr["raw_hash"]] = xr.get("channel", "")
+                    except Exception:
+                        pass  # 조회 실패 시 기존 로직으로 진행
+
+            # 1-c단계: order_no 기반 크로스 채널 중복 체크 (같은 주문번호가 다른 채널에 존재)
+            batch_order_nos = set()
+            for order in batch:
+                txn = order.get("transaction", {})
+                ono = txn.get("order_no", "")
+                if ono:
+                    batch_order_nos.add(ono)
+            cross_channel_orders = {}  # order_no → 기존 채널명
+            if batch_order_nos:
+                for oi in range(0, len(batch_order_nos), 200):
+                    o_chunk = list(batch_order_nos)[oi:oi + 200]
+                    try:
+                        xores = self.client.table("order_transactions") \
+                            .select("order_no,channel") \
+                            .in_("order_no", o_chunk) \
+                            .execute()
+                        for xor in (xores.data or []):
+                            xor_ono = xor.get("order_no", "")
+                            xor_ch = xor.get("channel", "")
+                            if xor_ono not in cross_channel_orders:
+                                cross_channel_orders[xor_ono] = set()
+                            cross_channel_orders[xor_ono].add(xor_ch)
+                    except Exception:
+                        pass
+
+            # 2단계: 분류 (insert / update / skip)
+            to_insert = []
+            to_update = []  # (id, txn_update)
+            ship_batch = []
+            cross_skipped = 0  # 크로스 채널 중복 스킵 카운트
+
+            for i, order in enumerate(batch, batch_start + 1):
+                txn = order.get("transaction", {})
+                ship = order.get("shipping", {})
+                key = (txn.get("channel", ""), txn.get("order_no", ""), txn.get("line_no", 1))
+                rec = existing_map.get(key)
+
+                if rec:
+                    if rec.get("status") in ("취소", "환불"):
+                        skipped += 1
+                        continue
+                    if rec.get("raw_hash") and rec.get("raw_hash") == txn.get("raw_hash"):
+                        skipped += 1
+                        continue
+                    # UPDATE 대상
+                    txn_update = {k: v for k, v in txn.items() if k != "raw_data"}
+                    txn_update["import_run_id"] = import_run_id
+                    if "raw_data" in txn:
+                        txn_update["raw_data"] = txn["raw_data"]
+                    to_update.append((rec["id"], txn_update, i))
+                else:
+                    # 크로스 채널 중복 체크 1: 같은 raw_hash가 다른 채널에 이미 존재
+                    t_hash = txn.get("raw_hash", "")
+                    existing_ch = cross_channel_hashes.get(t_hash)
+                    if t_hash and existing_ch and existing_ch != txn.get("channel", ""):
+                        cross_skipped += 1
+                        skipped += 1
+                        continue
+                    # 크로스 채널 중복 체크 2: 같은 order_no가 다른 채널에 이미 존재
+                    t_ono = txn.get("order_no", "")
+                    t_ch = txn.get("channel", "")
+                    existing_chs = cross_channel_orders.get(t_ono, set())
+                    other_chs = existing_chs - {t_ch}
+                    if t_ono and other_chs:
+                        cross_skipped += 1
+                        skipped += 1
+                        continue
+                    # INSERT 대상
+                    txn["import_run_id"] = import_run_id
+                    to_insert.append((txn, i))
+
+                # shipping 수집
+                if ship and ship.get("name"):
+                    ship_data = {
+                        "channel": txn.get("channel", ""),
+                        "order_no": txn.get("order_no", ""),
+                        **{k: v for k, v in ship.items() if k not in ("channel", "order_no")},
+                        "expires_at": (datetime.now(timezone.utc) + timedelta(days=180)).isoformat(),
+                    }
+                    ship_batch.append(ship_data)
+
+            # 3단계: 배치 INSERT
+            if to_insert:
+                try:
+                    rows = [t[0] for t in to_insert]
+                    self.client.table("order_transactions").insert(rows).execute()
+                    inserted += len(rows)
+                except Exception as e:
+                    # 배치 실패 시 개별 재시도
+                    for txn_data, row_i in to_insert:
+                        try:
+                            self.client.table("order_transactions").insert(txn_data).execute()
+                            inserted += 1
+                        except Exception as e2:
+                            failed += 1
+                            errors.append({"row": row_i, "order_no": txn_data.get("order_no", ""), "error": str(e2)})
+
+            # 4단계: UPDATE (개별 — id 기반이라 배치 불가)
+            for rec_id, txn_update, row_i in to_update:
+                try:
+                    self.client.table("order_transactions").update(txn_update) \
+                        .eq("id", rec_id).execute()
+                    updated += 1
+                except Exception as e:
+                    failed += 1
+                    errors.append({"row": row_i, "order_no": txn_update.get("order_no", ""), "error": str(e)})
+                    if failed <= 3:
+                        print(f"[DB] fallback update row {row_i}: {str(e)[:200]}")
+
+            # 5단계: shipping 배치 upsert
+            if ship_batch:
+                try:
+                    self.client.table("order_shipping").upsert(
+                        ship_batch, on_conflict="channel,order_no"
+                    ).execute()
+                except Exception:
+                    # 배치 실패 시 개별 재시도
+                    for sd in ship_batch:
+                        try:
+                            self.client.table("order_shipping").upsert(
+                                sd, on_conflict="channel,order_no"
+                            ).execute()
+                        except Exception:
+                            pass
+
+        # import_runs 결과 갱신
+        status = "completed" if failed == 0 else ("partial" if inserted + updated > 0 else "failed")
+        self.update_import_run(import_run_id, {
+            "success_count": inserted + updated,
+            "changed_count": updated,
+            "fail_count": failed,
+            "error_summary": errors if errors else None,
+            "status": status,
+        })
+        result = {"inserted": inserted, "updated": updated, "skipped": skipped, "failed": failed, "errors": errors}
+        if cross_skipped > 0:
+            result["cross_channel_skipped"] = cross_skipped
+        return result
+
+    def cancel_or_edit_order(self, order_id, change_type, payload, reason, user):
+        """주문 수정/취소/환불 (RPC 호출).
+        반환: {success, change_type, order_id} or {success: false, error}
+        """
+        try:
+            res = self.client.rpc("rpc_cancel_or_edit_order", {
+                "p_order_id": order_id,
+                "p_change_type": change_type,
+                "p_payload": payload or {},
+                "p_reason": reason or "",
+                "p_user": user or "",
+            }).execute()
+            return res.data if res.data else {"success": False, "error": "RPC 응답 없음"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def query_order_transactions(self, date_from=None, date_to=None, channel=None,
+                                  status=None, search=None, limit=100, offset=0):
+        """주문 목록 조회 (필터 지원)."""
+        try:
+            q = self.client.table("order_transactions").select("*")
+            if date_from:
+                q = q.gte("order_date", date_from)
+            if date_to:
+                q = q.lte("order_date", date_to)
+            if channel:
+                q = q.eq("channel", channel)
+            if status:
+                q = q.eq("status", status)
+            if search:
+                q = q.or_(f"order_no.ilike.%{search}%,product_name.ilike.%{search}%")
+            q = q.order("order_date", desc=True).order("id", desc=True)
+            q = q.range(offset, offset + limit - 1)
+            res = q.execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    def query_order_transaction_by_id(self, order_id):
+        """주문 상세 조회."""
+        try:
+            res = self.client.table("order_transactions").select("*") \
+                .eq("id", order_id).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def query_order_shipping(self, channel, order_no):
+        """배송 정보 조회."""
+        try:
+            res = self.client.table("order_shipping").select("*") \
+                .eq("channel", channel).eq("order_no", order_no).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            return None
+
+    def query_order_change_log(self, order_transaction_id):
+        """주문 변경 이력 조회."""
+        try:
+            res = self.client.table("order_change_log").select("*") \
+                .eq("order_transaction_id", order_transaction_id) \
+                .order("changed_at", desc=True).execute()
+            return res.data or []
+        except Exception:
+            return []
+
+    def anonymize_expired_shipping(self):
+        """만료된 배송 개인정보 익명화 (6개월 경과).
+        반환: 익명화 처리 건수
+        """
+        from datetime import datetime, timezone
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            # 대상 조회
+            res = self.client.table("order_shipping").select("id") \
+                .lt("expires_at", now_iso) \
+                .eq("is_anonymized", False).execute()
+
+            if not res.data:
+                return 0
+
+            count = 0
+            for rec in res.data:
+                self.client.table("order_shipping").update({
+                    "name": "***",
+                    "phone": "***",
+                    "phone2": "***",
+                    "address": "***",
+                    "memo": "***",
+                    "is_anonymized": True,
+                    "anonymized_at": now_iso,
+                }).eq("id", rec["id"]).execute()
+                count += 1
+
+            return count
+        except Exception as e:
+            print(f"[DB] anonymize_expired_shipping error: {e}")
+            return 0
+
+    def query_order_shipping_for_invoice(self, channel=None, date_from=None, date_to=None):
+        """송장 생성용: 정상 주문의 배송정보 조회 (대기 상태만).
+        order_transactions와 order_shipping 조인이 필요하므로
+        transactions에서 대상 주문번호를 먼저 조회 후 shipping에서 검색.
+        """
+        try:
+            # 1. 대상 거래 조회
+            q = self.client.table("order_transactions") \
+                .select("channel,order_no,order_date,product_name,barcode,line_code,sort_order,qty,unit_price")
+            q = q.eq("status", "정상")
+            if channel:
+                q = q.eq("channel", channel)
+            if date_from:
+                q = q.gte("order_date", date_from)
+            if date_to:
+                q = q.lte("order_date", date_to)
+            txns = self._paginate_query("order_transactions", lambda t: q)
+
+            if not txns:
+                return []
+
+            # 2. 해당 주문들의 배송정보 조회
+            order_nos = list(set(t["order_no"] for t in txns))
+            # Supabase in_ 최대 제한 있으므로 분할
+            shipping_map = {}
+            for chunk_start in range(0, len(order_nos), 100):
+                chunk = order_nos[chunk_start:chunk_start + 100]
+                sq = self.client.table("order_shipping").select("*") \
+                    .eq("shipping_status", "대기") \
+                    .in_("order_no", chunk)
+                if channel:
+                    sq = sq.eq("channel", channel)
+                ship_res = sq.execute()
+                for s in (ship_res.data or []):
+                    key = (s["channel"], s["order_no"])
+                    shipping_map[key] = s
+
+            # 3. 조인
+            result = []
+            for t in txns:
+                key = (t["channel"], t["order_no"])
+                ship = shipping_map.get(key)
+                if ship:
+                    result.append({**t, "shipping": ship})
+
+            return result
+        except Exception as e:
+            print(f"[DB] query_order_shipping_for_invoice error: {e}")
+            return []
+
+    # ================================================================
+    # Phase 2: 출고/매출 자동처리
+    # ================================================================
+
+    def query_pending_outbound_orders(self, date_from=None, date_to=None, channel=None):
+        """미처리 주문 조회 (is_outbound_done=false, status='정상')."""
+        try:
+            q = self.client.table("order_transactions").select("*") \
+                .eq("is_outbound_done", False).eq("status", "정상")
+            if date_from:
+                q = q.gte("order_date", date_from)
+            if date_to:
+                q = q.lte("order_date", date_to)
+            if channel:
+                q = q.eq("channel", channel)
+            q = q.order("order_date").order("id")
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_pending_outbound_orders error: {e}")
+            return []
+
+    def mark_orders_outbound_done(self, order_ids, outbound_date, revenue_category=None):
+        """주문 출고 완료 표시."""
+        try:
+            update_data = {"is_outbound_done": True, "outbound_date": outbound_date}
+            if revenue_category:
+                update_data["revenue_category"] = revenue_category
+            for chunk_start in range(0, len(order_ids), 50):
+                chunk = order_ids[chunk_start:chunk_start + 50]
+                self.client.table("order_transactions").update(update_data) \
+                    .in_("id", chunk).execute()
+        except Exception as e:
+            print(f"[DB] mark_orders_outbound_done error: {e}")
+
+    def query_outbound_summary(self, date_from=None, date_to=None):
+        """출고 처리 현황 요약."""
+        try:
+            q_pending = self.client.table("order_transactions") \
+                .select("id", count="exact") \
+                .eq("is_outbound_done", False).eq("status", "정상")
+            q_done = self.client.table("order_transactions") \
+                .select("id", count="exact") \
+                .eq("is_outbound_done", True)
+            if date_from:
+                q_pending = q_pending.gte("order_date", date_from)
+                q_done = q_done.gte("order_date", date_from)
+            if date_to:
+                q_pending = q_pending.lte("order_date", date_to)
+                q_done = q_done.lte("order_date", date_to)
+            p_res = q_pending.execute()
+            d_res = q_done.execute()
+            return {
+                "pending": p_res.count if p_res.count is not None else len(p_res.data or []),
+                "done": d_res.count if d_res.count is not None else len(d_res.data or []),
+            }
+        except Exception as e:
+            print(f"[DB] query_outbound_summary error: {e}")
+            return {"pending": 0, "done": 0}
+
+    # ================================================================
+    # Phase 3: 대시보드 쿼리
+    # ================================================================
+
+    def count_orders_by_date(self, date_str):
+        """특정 날짜의 주문 건수."""
+        try:
+            res = self.client.table("order_transactions").select("id", count="exact") \
+                .eq("order_date", date_str).execute()
+            return res.count if res.count is not None else len(res.data or [])
+        except Exception:
+            return 0
+
+    def sum_revenue_by_date(self, date_str):
+        """특정 날짜의 매출 합계 (order_transactions 기반).
+        Returns: dict {total_amount, settlement, commission, qty}
+        """
+        try:
+            res = self.client.table("order_transactions") \
+                .select("total_amount,settlement,commission,qty") \
+                .eq("order_date", date_str) \
+                .eq("status", "정상").execute()
+            total_amount = sum(r.get("total_amount", 0) or 0 for r in (res.data or []))
+            settlement = sum(r.get("settlement", 0) or 0 for r in (res.data or []))
+            commission = sum(r.get("commission", 0) or 0 for r in (res.data or []))
+            qty = sum(r.get("qty", 0) or 0 for r in (res.data or []))
+            return {
+                'total_amount': total_amount,
+                'settlement': settlement,
+                'commission': commission,
+                'qty': qty,
+            }
+        except Exception:
+            return {'total_amount': 0, 'settlement': 0, 'commission': 0, 'qty': 0}
+
+    def query_revenue_trend(self, days=7):
+        """최근 N일 매출 추이 (order_transactions + daily_revenue 합산).
+
+        DB_CUTOFF_DATE 이전 기간은 daily_revenue(레거시)에서 조회,
+        이후 기간은 order_transactions에서 조회.
+        """
+        from services.channel_config import DB_CUTOFF_DATE
+        try:
+            date_from = days_ago_kst(days)
+            today = today_kst()
+            daily = {}
+
+            # ── 1. order_transactions (cutoff 이후) ──
+            ot_start = max(date_from, DB_CUTOFF_DATE)
+            if ot_start <= today:
+                def ot_builder(table):
+                    return self.client.table(table).select(
+                        "order_date,total_amount,settlement"
+                    ).gte("order_date", ot_start) \
+                     .lte("order_date", today) \
+                     .eq("status", "정상") \
+                     .order("order_date")
+
+                ot_rows = self._paginate_query("order_transactions", ot_builder)
+                for r in ot_rows:
+                    d = r.get("order_date", "")
+                    if not d:
+                        continue
+                    ta = r.get("total_amount", 0) or 0
+                    st = r.get("settlement", 0) or 0
+                    if d not in daily:
+                        daily[d] = {"date": d, "total": 0, "settlement": 0}
+                    daily[d]["total"] += ta
+                    daily[d]["settlement"] += st
+
+            # ── 2. daily_revenue (cutoff 이전) ──
+            if date_from < DB_CUTOFF_DATE:
+                from datetime import datetime, timedelta
+                cutoff_dt = datetime.strptime(DB_CUTOFF_DATE, '%Y-%m-%d')
+                legacy_end = (cutoff_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+
+                def builder(table):
+                    return self.client.table(table).select(
+                        'revenue_date,category,revenue'
+                    ).gte('revenue_date', date_from) \
+                     .lte('revenue_date', legacy_end) \
+                     .order('revenue_date')
+
+                rows = self._paginate_query('daily_revenue', builder)
+                for r in rows:
+                    d = r.get("revenue_date", "")
+                    cat = (r.get("category") or "").strip()
+                    # 거래처매출/로켓 제외 (B2B)
+                    if cat in ("거래처매출", "로켓"):
+                        continue
+                    rev = r.get("revenue", 0) or 0
+                    if d not in daily:
+                        daily[d] = {"date": d, "total": 0, "settlement": 0}
+                    daily[d]["total"] += rev
+
+            return sorted(daily.values(), key=lambda x: x["date"])
+        except Exception:
+            return []
+
+    def query_orders_by_channel(self, date_from=None, date_to=None):
+        """채널별 주문 통계 (채널 표시명 정규화 적용)."""
+        from services.channel_config import normalize_channel_display
+        try:
+            def builder(table):
+                q = self.client.table(table) \
+                    .select("channel,qty,total_amount") \
+                    .eq("status", "정상")
+                if date_from:
+                    q = q.gte("order_date", date_from)
+                if date_to:
+                    q = q.lte("order_date", date_to)
+                return q
+
+            rows = self._paginate_query("order_transactions", builder)
+            channels = {}
+            for r in rows:
+                ch = normalize_channel_display(r.get("channel", "기타"))
+                if ch not in channels:
+                    channels[ch] = {"channel": ch, "count": 0, "qty": 0, "amount": 0}
+                channels[ch]["count"] += 1
+                channels[ch]["qty"] += (r.get("qty") or 0)
+                channels[ch]["amount"] += (r.get("total_amount") or 0)
+            return sorted(channels.values(), key=lambda x: x["count"], reverse=True)
+        except Exception:
+            return []
+
+    def query_stock_summary_by_location(self, exclude_products=None):
+        """창고별 재고 품목 수 요약 (양수 재고만)."""
+        try:
+            today = today_kst()
+            res = self.client.table("stock_ledger") \
+                .select("product_name,location,qty") \
+                .lte("transaction_date", today).execute()
+            # 품목+창고별 합산
+            _excl = exclude_products or set()
+            stock = {}
+            for r in (res.data or []):
+                pn = r.get("product_name", "")
+                if pn in _excl:
+                    continue
+                key = (pn, r.get("location", ""))
+                stock[key] = stock.get(key, 0) + (r.get("qty") or 0)
+            # 창고별 집계 (양수 재고 품목만)
+            locations = {}
+            for (pn, loc), total_qty in stock.items():
+                if total_qty > 0:
+                    if loc not in locations:
+                        locations[loc] = {"location": loc, "product_count": 0, "total_qty": 0}
+                    locations[loc]["product_count"] += 1
+                    locations[loc]["total_qty"] += total_qty
+            return sorted(locations.values(), key=lambda x: x["product_count"], reverse=True)
+        except Exception:
+            return []
+
+    def query_top_products_by_revenue(self, days=30, limit=10):
+        """매출 TOP N 상품 (order_transactions 기반, 최근 N일)."""
+        try:
+            date_from = days_ago_kst(days)
+            res = self.client.table("order_transactions") \
+                .select("product_name,qty,total_amount,settlement") \
+                .gte("order_date", date_from) \
+                .eq("status", "정상").execute()
+            products = {}
+            for r in (res.data or []):
+                pn = (r.get("product_name") or "").replace(' ', '').strip()
+                if not pn:
+                    continue  # 상품명 없는 레코드 제외
+                if pn not in products:
+                    products[pn] = {"product_name": pn, "qty": 0,
+                                    "revenue": 0, "settlement": 0}
+                products[pn]["qty"] += (r.get("qty") or 0)
+                products[pn]["revenue"] += (r.get("total_amount") or 0)
+                products[pn]["settlement"] += (r.get("settlement") or 0)
+            ranked = sorted(products.values(), key=lambda x: x["revenue"], reverse=True)
+            return ranked[:limit]
+        except Exception:
+            return []
+
+    def query_recent_activity(self, limit=20):
+        """최근 활동 (stock_ledger + order_transactions 통합)."""
+        try:
+            # 최근 주문
+            orders = self.client.table("order_transactions") \
+                .select("id,channel,order_date,product_name,qty,processed_at") \
+                .order("processed_at", desc=True).limit(limit).execute()
+            # 최근 재고 변동
+            stock = self.client.table("stock_ledger") \
+                .select("id,type,product_name,qty,location,transaction_date") \
+                .order("id", desc=True).limit(limit).execute()
+
+            activities = []
+            for o in (orders.data or []):
+                activities.append({
+                    "type": "order",
+                    "date": o.get("processed_at", o.get("order_date", "")),
+                    "desc": f"{o.get('channel','')} 주문: {o.get('product_name','')} x{o.get('qty',0)}",
+                })
+            for s in (stock.data or []):
+                type_label = {
+                    "INBOUND": "입고", "SALES_OUT": "출고", "PRODUCTION": "생산",
+                    "PROD_OUT": "생산출고", "ADJUST": "조정", "SET_OUT": "세트출고",
+                    "SET_IN": "세트입고", "REPACK_OUT": "소분출고", "REPACK_IN": "소분입고",
+                    "MOVE_OUT": "이동출고", "MOVE_IN": "이동입고",
+                }.get(s.get("type", ""), s.get("type", ""))
+                activities.append({
+                    "type": "stock",
+                    "date": s.get("transaction_date", ""),
+                    "desc": f"[{type_label}] {s.get('product_name','')} {s.get('qty',0)} ({s.get('location','')})",
+                })
+            activities.sort(key=lambda x: x.get("date", ""), reverse=True)
+            return activities[:limit]
+        except Exception:
+            return []
+
+    # ================================================================
+    # Phase 2: BOM 마스터 조회 (자동 처리용)
+    # ================================================================
+
+    def query_bom_master_all(self):
+        """bom_master 전체 조회. Returns: list of {channel, set_name, components}."""
+        try:
+            res = self.client.table("bom_master").select("*").execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_bom_master_all error: {e}")
+            return []
+
+    # ================================================================
+    # 실시간 주문처리: 추가 메서드
+    # ================================================================
+
+    def query_orders_by_import_run(self, import_run_id, outbound_done=None):
+        """특정 import_run에 속한 주문 조회 (실시간 처리용)."""
+        try:
+            q = self.client.table("order_transactions").select("*") \
+                .eq("import_run_id", import_run_id).eq("status", "정상")
+            if outbound_done is not None:
+                q = q.eq("is_outbound_done", outbound_done)
+            q = q.order("id")
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_orders_by_import_run error: {e}")
+            return []
+
+    def reset_order_outbound(self, order_id):
+        """주문 출고 상태 초기화 (취소/환불 시)."""
+        try:
+            self.client.table("order_transactions").update({
+                "is_outbound_done": False,
+                "outbound_date": None,
+                "revenue_category": None,
+            }).eq("id", order_id).execute()
+        except Exception as e:
+            print(f"[DB] reset_order_outbound error: {e}")
+
+    def search_order_shipping(self, keyword, field='all'):
+        """order_shipping 검색 (송장번호/수취인명).
+
+        Args:
+            keyword: 검색어
+            field: 'all', 'invoice', 'name'
+
+        Returns: list of {channel, order_no, name, phone, invoice_no, ...}
+        """
+        try:
+            q = self.client.table("order_shipping").select("*") \
+                .eq("is_anonymized", False)
+            if field == 'invoice':
+                q = q.ilike("invoice_no", f"%{keyword}%")
+            elif field == 'name':
+                q = q.ilike("name", f"%{keyword}%")
+            else:
+                q = q.or_(
+                    f"invoice_no.ilike.%{keyword}%,"
+                    f"name.ilike.%{keyword}%"
+                )
+            q = q.order("created_at", desc=True).limit(100)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] search_order_shipping error: {e}")
+            return []
+
+    def update_order_shipping_invoice(self, channel, order_no,
+                                       invoice_no, courier=None,
+                                       shipping_status=None):
+        """order_shipping 송장번호 업데이트."""
+        try:
+            update = {"invoice_no": invoice_no}
+            if courier:
+                update["courier"] = courier
+            if shipping_status:
+                update["shipping_status"] = shipping_status
+            self.client.table("order_shipping").update(update) \
+                .eq("channel", channel).eq("order_no", order_no).execute()
+            return True
+        except Exception as e:
+            print(f"[DB] update_order_shipping_invoice error: {e}")
+            return False
+
+    def bulk_update_shipping_invoices(self, updates):
+        """송장번호 일괄 업데이트.
+
+        Args:
+            updates: list of {channel, order_no, invoice_no, courier}
+        Returns:
+            int: 업데이트 건수
+        """
+        count = 0
+        for u in updates:
+            if self.update_order_shipping_invoice(
+                u['channel'], u['order_no'],
+                u['invoice_no'], u.get('courier')
+            ):
+                count += 1
+        return count
+
+    def _batch_query_orders_by_keys(self, order_keys, date_from=None, date_to=None,
+                                      channel_filter=None, status=None, limit=200):
+        """(channel, order_no) 쌍 목록으로 order_transactions 배치 조회.
+        채널별 .in_() 사용하여 N+1 제거.
+        """
+        by_channel = {}
+        for ch, ono in order_keys:
+            by_channel.setdefault(ch, set()).add(ono)
+
+        results = []
+        for ch, order_nos in by_channel.items():
+            if channel_filter and ch != channel_filter:
+                continue
+            for i in range(0, len(order_nos), 200):
+                batch_nos = list(order_nos)[i:i+200]
+                try:
+                    q = self.client.table("order_transactions").select("*") \
+                        .eq("channel", ch).in_("order_no", batch_nos)
+                    if date_from:
+                        q = q.gte("order_date", date_from)
+                    if date_to:
+                        q = q.lte("order_date", date_to)
+                    if status:
+                        q = q.eq("status", status)
+                    res = q.execute()
+                    if res.data:
+                        results.extend(res.data)
+                except Exception:
+                    pass
+        results.sort(key=lambda x: x.get('order_date', ''), reverse=True)
+        return results[:limit]
+
+    def query_order_transactions_extended(self, date_from=None, date_to=None,
+                                           channel=None, status=None,
+                                           search=None, search_field=None,
+                                           limit=100, offset=0):
+        """주문 확장 검색 (송장번호/수취인명 검색 포함).
+        최적화: 채널별 배치 .in_() 조회 (N+1 제거).
+
+        search_field: 'all'(기본), 'order_no', 'product', 'invoice', 'recipient'
+        """
+        try:
+            # 송장번호/수취인명 검색 → order_shipping에서 order_no 매칭
+            if search and search_field in ('invoice', 'recipient'):
+                sf = 'invoice' if search_field == 'invoice' else 'name'
+                shipping = self.search_order_shipping(search, field=sf)
+                if not shipping:
+                    return []
+                order_keys = [(s['channel'], s['order_no']) for s in shipping]
+                results = self._batch_query_orders_by_keys(
+                    order_keys[:200], date_from, date_to, channel, status, limit
+                )
+                if results:
+                    self._merge_invoice_no(results)
+                return results
+
+            # 기본 검색 (기존 로직 확장)
+            q = self.client.table("order_transactions").select("*")
+            if date_from:
+                q = q.gte("order_date", date_from)
+            if date_to:
+                q = q.lte("order_date", date_to)
+            if channel:
+                q = q.eq("channel", channel)
+            if status:
+                q = q.eq("status", status)
+            if search:
+                if search_field == 'order_no':
+                    q = q.ilike("order_no", f"%{search}%")
+                elif search_field in ('product', 'product_name'):
+                    q = q.ilike("product_name", f"%{search}%")
+                else:
+                    q = q.or_(
+                        f"order_no.ilike.%{search}%,"
+                        f"product_name.ilike.%{search}%"
+                    )
+            q = q.order("order_date", desc=True).order("id", desc=True)
+            q = q.range(offset, offset + limit - 1)
+            res = q.execute()
+            results = res.data or []
+
+            # "전체" 검색이면 수취인명 검색 결과도 병합 (배치 조회)
+            if search and search_field in ('all', '', None):
+                try:
+                    shipping = self.search_order_shipping(search, field='name')
+                    if shipping:
+                        existing_ids = {r['id'] for r in results}
+                        order_keys = [(s['channel'], s['order_no']) for s in shipping]
+                        extra = self._batch_query_orders_by_keys(
+                            order_keys[:100], date_from, date_to, channel, status, limit
+                        )
+                        for row in extra:
+                            if row['id'] not in existing_ids:
+                                results.append(row)
+                                existing_ids.add(row['id'])
+                        results.sort(key=lambda x: x.get('order_date', ''), reverse=True)
+                        results = results[:limit]
+                except Exception:
+                    pass
+
+            # 결과에 invoice_no 병합 (order_shipping 조인)
+            if results:
+                self._merge_invoice_no(results)
+            return results
+        except Exception as e:
+            print(f"[DB] query_order_transactions_extended error: {e}")
+            return []
+
+    def _merge_invoice_no(self, orders):
+        """주문 목록에 order_shipping의 invoice_no, courier, name 병합 (in-place).
+        최적화: 채널별 order_no 배치 .in_() 조회 (N+1 제거).
+        """
+        try:
+            keys = list({(o.get('channel', ''), o.get('order_no', '')) for o in orders})
+            shipping_map = {}  # (channel, order_no) → {invoice_no, courier, name}
+
+            # 채널별로 그룹화하여 .in_() 배치 조회
+            by_channel = {}
+            for ch, ono in keys:
+                by_channel.setdefault(ch, []).append(ono)
+
+            for ch, order_nos in by_channel.items():
+                # 200개씩 배치 (Supabase .in_() 제한 고려)
+                for i in range(0, len(order_nos), 200):
+                    batch_nos = order_nos[i:i+200]
+                    try:
+                        res = self.client.table("order_shipping") \
+                            .select("channel,order_no,invoice_no,courier,name") \
+                            .eq("channel", ch) \
+                            .in_("order_no", batch_nos) \
+                            .execute()
+                        for s in (res.data or []):
+                            shipping_map[(s.get('channel', ''), s.get('order_no', ''))] = {
+                                'invoice_no': s.get('invoice_no', ''),
+                                'courier': s.get('courier', ''),
+                                'name': s.get('name', ''),
+                            }
+                    except Exception:
+                        pass
+
+            # 병합
+            for o in orders:
+                key = (o.get('channel', ''), o.get('order_no', ''))
+                si = shipping_map.get(key, {})
+                o['invoice_no'] = si.get('invoice_no', '')
+                o['courier'] = si.get('courier', '')
+                o['recipient_name'] = si.get('name', '')
+        except Exception as e:
+            print(f"[DB] _merge_invoice_no error: {e}")
+            import traceback; traceback.print_exc()
+            for o in orders:
+                o.setdefault('invoice_no', '')
+                o.setdefault('courier', '')
+                o.setdefault('recipient_name', '')
+
+    # ── Packing Jobs ──────────────────────────────────────
+
+    def insert_packing_job(self, payload):
+        """패킹 작업 생성."""
+        try:
+            res = self.client.table("packing_jobs").insert(payload).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] insert_packing_job error: {e}")
+            return None
+
+    def get_packing_job(self, job_id):
+        """패킹 작업 단건 조회."""
+        try:
+            res = self.client.table("packing_jobs").select("*") \
+                .eq("id", job_id).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] get_packing_job error: {e}")
+            return None
+
+    def update_packing_job(self, job_id, update_data):
+        """패킹 작업 업데이트."""
+        try:
+            self.client.table("packing_jobs").update(update_data) \
+                .eq("id", job_id).execute()
+            return True
+        except Exception as e:
+            print(f"[DB] update_packing_job error: {e}")
+            return False
+
+    def query_packing_jobs(self, user_id=None, date_from=None, date_to=None,
+                           search=None, limit=20, offset=0):
+        """패킹 작업 목록 조회."""
+        try:
+            q = self.client.table("packing_jobs").select("*") \
+                .eq("status", "completed")
+            if user_id:
+                q = q.eq("user_id", user_id)
+            if date_from:
+                q = q.gte("started_at", f"{date_from}T00:00:00+00:00")
+            if date_to:
+                q = q.lte("started_at", f"{date_to}T23:59:59+00:00")
+            if search:
+                q = q.or_(
+                    f"scanned_barcode.ilike.%{search}%,"
+                    f"product_name.ilike.%{search}%,"
+                    f"order_no.ilike.%{search}%"
+                )
+            q = q.order("completed_at", desc=True)
+            q = q.range(offset, offset + limit - 1)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_packing_jobs error: {e}")
+            return []
+
+    def count_packing_jobs(self, user_id=None, date_from=None, date_to=None,
+                           search=None):
+        """패킹 작업 건수."""
+        try:
+            q = self.client.table("packing_jobs").select("id", count="exact") \
+                .eq("status", "completed")
+            if user_id:
+                q = q.eq("user_id", user_id)
+            if date_from:
+                q = q.gte("started_at", f"{date_from}T00:00:00+00:00")
+            if date_to:
+                q = q.lte("started_at", f"{date_to}T23:59:59+00:00")
+            if search:
+                q = q.or_(
+                    f"scanned_barcode.ilike.%{search}%,"
+                    f"product_name.ilike.%{search}%,"
+                    f"order_no.ilike.%{search}%"
+                )
+            res = q.execute()
+            return res.count if res.count is not None else 0
+        except Exception as e:
+            print(f"[DB] count_packing_jobs error: {e}")
+            return 0
+
+    # ── Packing Video Storage ─────────────────────────────
+
+    def upload_packing_video(self, path, video_bytes):
+        """패킹 영상 Supabase Storage 업로드."""
+        try:
+            self.client.storage.from_("packing-videos").upload(
+                path, video_bytes,
+                file_options={"content-type": "video/webm"}
+            )
+            return True
+        except Exception as e:
+            print(f"[DB] upload_packing_video error: {e}")
+            raise
+
+    def get_packing_video_signed_url(self, path, expires_in=3600):
+        """패킹 영상 서명 URL 생성."""
+        try:
+            res = self.client.storage.from_("packing-videos") \
+                .create_signed_url(path, expires_in)
+            if isinstance(res, dict):
+                return res.get('signedURL', '') or res.get('signedUrl', '')
+            return ''
+        except Exception as e:
+            print(f"[DB] get_packing_video_signed_url error: {e}")
+            return ''
+
+    # ══════════════════════════════════════════════════════════
+    # 회계 ERP 메서드 (은행/세금계산서/매칭/정산)
+    # ══════════════════════════════════════════════════════════
+
+    # ── codef_connections ──
+
+    def insert_codef_connection(self, payload):
+        """CODEF 연결 정보 저장 (upsert)."""
+        try:
+            self.client.table("codef_connections").upsert(
+                payload, on_conflict="connected_id"
+            ).execute()
+        except Exception as e:
+            print(f"[DB] insert_codef_connection error: {e}")
+
+    def query_codef_connections(self):
+        """CODEF 연결 목록."""
+        try:
+            res = self.client.table("codef_connections") \
+                .select("*").order("created_at", desc=True).execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_codef_connections error: {e}")
+            return []
+
+    # ── bank_accounts ──
+
+    def query_bank_accounts(self):
+        """은행 계좌 전체 조회."""
+        try:
+            res = self.client.table("bank_accounts") \
+                .select("*").order("bank_name").execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_bank_accounts error: {e}")
+            return []
+
+    def query_bank_account_by_id(self, account_id):
+        """은행 계좌 1건 조회."""
+        try:
+            res = self.client.table("bank_accounts") \
+                .select("*").eq("id", account_id).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] query_bank_account_by_id error: {e}")
+            return None
+
+    def insert_bank_account(self, payload):
+        """은행 계좌 등록."""
+        try:
+            self.client.table("bank_accounts").insert(payload).execute()
+        except Exception as e:
+            print(f"[DB] insert_bank_account error: {e}")
+            raise
+
+    def update_bank_account(self, account_id, update_data):
+        """은행 계좌 수정."""
+        try:
+            self.client.table("bank_accounts") \
+                .update(update_data).eq("id", account_id).execute()
+        except Exception as e:
+            print(f"[DB] update_bank_account error: {e}")
+
+    def delete_bank_account(self, account_id):
+        """은행 계좌 삭제."""
+        try:
+            self.client.table("bank_accounts") \
+                .delete().eq("id", account_id).execute()
+        except Exception as e:
+            print(f"[DB] delete_bank_account error: {e}")
+
+    # ── bank_transactions ──
+
+    def query_bank_transactions(self, date_from=None, date_to=None,
+                                 bank_account_id=None, transaction_type=None,
+                                 category=None, unmatched_only=False):
+        """은행 거래내역 조회 (필터)."""
+        try:
+            q = self.client.table("bank_transactions") \
+                .select("*").order("transaction_date", desc=True)
+            if date_from:
+                q = q.gte("transaction_date", date_from)
+            if date_to:
+                q = q.lte("transaction_date", date_to)
+            if bank_account_id:
+                q = q.eq("bank_account_id", bank_account_id)
+            if transaction_type:
+                q = q.eq("transaction_type", transaction_type)
+            if category:
+                q = q.eq("category", category)
+            if unmatched_only:
+                q = q.is_("matched_invoice_id", "null")
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_bank_transactions error: {e}")
+            return []
+
+    def query_bank_transaction_by_id(self, tx_id):
+        """은행 거래내역 1건 조회."""
+        try:
+            res = self.client.table("bank_transactions") \
+                .select("*").eq("id", tx_id).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] query_bank_transaction_by_id error: {e}")
+            return None
+
+    def insert_bank_transaction(self, payload):
+        """은행 거래내역 1건 등록."""
+        self.client.table("bank_transactions").insert(payload).execute()
+
+    def update_bank_transaction(self, tx_id, update_data):
+        """은행 거래내역 수정 (카테고리 분류 등)."""
+        try:
+            self.client.table("bank_transactions") \
+                .update(update_data).eq("id", tx_id).execute()
+        except Exception as e:
+            print(f"[DB] update_bank_transaction error: {e}")
+
+    # ── tax_invoices ──
+
+    def query_tax_invoices(self, direction=None, status=None,
+                            date_from=None, date_to=None,
+                            partner_name=None, unmatched_only=False):
+        """세금계산서 목록 조회."""
+        try:
+            q = self.client.table("tax_invoices") \
+                .select("*").order("write_date", desc=True)
+            if direction:
+                q = q.eq("direction", direction)
+            if status:
+                q = q.eq("status", status)
+            if date_from:
+                q = q.gte("write_date", date_from)
+            if date_to:
+                q = q.lte("write_date", date_to)
+            if partner_name:
+                q = q.or_(
+                    f"supplier_corp_name.ilike.%{partner_name}%,"
+                    f"buyer_corp_name.ilike.%{partner_name}%"
+                )
+            if unmatched_only:
+                q = q.is_("matched_transaction_id", "null")
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_tax_invoices error: {e}")
+            return []
+
+    def query_tax_invoice_by_id(self, invoice_id):
+        """세금계산서 1건 조회."""
+        try:
+            res = self.client.table("tax_invoices") \
+                .select("*").eq("id", invoice_id).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] query_tax_invoice_by_id error: {e}")
+            return None
+
+    def insert_tax_invoice(self, payload):
+        """세금계산서 등록."""
+        try:
+            res = self.client.table("tax_invoices").insert(payload).execute()
+            return res.data[0]['id'] if res.data else None
+        except Exception as e:
+            print(f"[DB] insert_tax_invoice error: {e}")
+            return None
+
+    def update_tax_invoice(self, invoice_id, update_data):
+        """세금계산서 수정."""
+        try:
+            self.client.table("tax_invoices") \
+                .update(update_data).eq("id", invoice_id).execute()
+        except Exception as e:
+            print(f"[DB] update_tax_invoice error: {e}")
+
+    def delete_tax_invoice(self, invoice_id):
+        """세금계산서 삭제."""
+        try:
+            self.client.table("tax_invoices") \
+                .delete().eq("id", invoice_id).execute()
+        except Exception as e:
+            print(f"[DB] delete_tax_invoice error: {e}")
+
+    # ── payment_matches ──
+
+    def query_payment_matches(self, date_from=None, date_to=None, status=None):
+        """매출-입금 매칭 목록 조회."""
+        try:
+            q = self.client.table("payment_matches") \
+                .select("*").order("matched_at", desc=True)
+            if status:
+                q = q.eq("match_status", status)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_payment_matches error: {e}")
+            return []
+
+    def query_payment_match_by_id(self, match_id):
+        """매칭 1건 조회."""
+        try:
+            res = self.client.table("payment_matches") \
+                .select("*").eq("id", match_id).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] query_payment_match_by_id error: {e}")
+            return None
+
+    def insert_payment_match(self, payload):
+        """매칭 레코드 등록."""
+        try:
+            self.client.table("payment_matches").insert(payload).execute()
+        except Exception as e:
+            print(f"[DB] insert_payment_match error: {e}")
+
+    def delete_payment_match(self, match_id):
+        """매칭 해제."""
+        try:
+            self.client.table("payment_matches") \
+                .delete().eq("id", match_id).execute()
+        except Exception as e:
+            print(f"[DB] delete_payment_match error: {e}")
+
+    # ── account_codes ──
+
+    def query_account_codes(self, category=None):
+        """계정과목 조회."""
+        try:
+            q = self.client.table("account_codes") \
+                .select("*").order("sort_order")
+            if category:
+                q = q.eq("category", category)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_account_codes error: {e}")
+            return []
+
+    # ── platform_settlements (Phase 2 확장) ──
+
+    def query_platform_settlements(self, channel=None, match_status=None,
+                                    date_from=None, date_to=None):
+        """플랫폼 정산 조회."""
+        try:
+            q = self.client.table("platform_settlements") \
+                .select("*").order("settlement_date", desc=True)
+            if channel:
+                q = q.eq("channel", channel)
+            if match_status:
+                q = q.eq("match_status", match_status)
+            if date_from:
+                q = q.gte("settlement_date", date_from)
+            if date_to:
+                q = q.lte("settlement_date", date_to)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_platform_settlements error: {e}")
+            return []
+
+    def insert_platform_settlement(self, payload):
+        """플랫폼 정산 등록 (upsert)."""
+        try:
+            self.client.table("platform_settlements").upsert(
+                payload, on_conflict="channel,settlement_date,api_reference"
+            ).execute()
+        except Exception as e:
+            print(f"[DB] insert_platform_settlement error: {e}")
+
+    # ── 거래처 조회 헬퍼 (기존 autotool business_partners 테이블) ──
+
+    def query_partner_by_id(self, partner_id):
+        """거래처 1건 조회."""
+        try:
+            res = self.client.table("business_partners") \
+                .select("*").eq("id", partner_id).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] query_partner_by_id error: {e}")
+            return None
+
+    def query_partners(self, is_active=True):
+        """거래처 목록 조회."""
+        try:
+            q = self.client.table("business_partners") \
+                .select("*").order("partner_name")
+            if is_active:
+                q = q.eq("is_active", True)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_partners error: {e}")
+            return []
+
+    def query_default_business(self):
+        """기본 사업장 정보 (settings 또는 하드코딩)."""
+        try:
+            res = self.client.table("business_info") \
+                .select("*").limit(1).execute()
+            return res.data[0] if res.data else None
+        except Exception:
+            # 테이블 없으면 None
+            return None
