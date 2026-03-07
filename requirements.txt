@@ -8,5 +8,5 @@ supabase==2.11.0
 pandas==2.2.3
 openpyxl==3.1.5
 easycodefpy>=1.0.0
-popbill>=1.68.0
+popbill>=1.60.0
 gunicorn==23.0.0
