@@ -143,6 +143,9 @@ def create_app(config_class=None):
             {'name': '세금계산서 발행', 'icon': 'bi-plus-circle', 'url': '/tax-invoice/issue', 'group': '세금계산서'},
             {'name': '매출-입금 매칭', 'icon': 'bi-link-45deg', 'url': '/accounting/matching', 'group': '매칭'},
             {'name': '미수금 관리', 'icon': 'bi-exclamation-triangle', 'url': '/accounting/receivables', 'group': '매칭'},
+            {'name': '미지급금 관리', 'icon': 'bi-cash-coin', 'url': '/accounting/payables', 'group': '매칭'},
+            {'name': '플랫폼 정산', 'icon': 'bi-shop', 'url': '/accounting/settlements', 'group': '정산'},
+            {'name': '리포트', 'icon': 'bi-file-earmark-bar-graph', 'url': '/accounting/reports', 'group': '리포트'},
         ]
         # 그룹별 분류
         groups = {}

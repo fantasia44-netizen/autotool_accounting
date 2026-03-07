@@ -2619,6 +2619,7 @@ class SupabaseDB(DBBase):
                 q = q.eq("category", category)
             if unmatched_only:
                 q = q.is_("matched_invoice_id", "null")
+                q = q.is_("matched_settlement_id", "null")
             res = q.execute()
             return res.data or []
         except Exception as e:
@@ -2719,6 +2720,10 @@ class SupabaseDB(DBBase):
         try:
             q = self.client.table("payment_matches") \
                 .select("*").order("matched_at", desc=True)
+            if date_from:
+                q = q.gte("matched_at", date_from)
+            if date_to:
+                q = q.lte("matched_at", date_to)
             if status:
                 q = q.eq("match_status", status)
             res = q.execute()
@@ -2797,6 +2802,39 @@ class SupabaseDB(DBBase):
             ).execute()
         except Exception as e:
             print(f"[DB] insert_platform_settlement error: {e}")
+
+    def update_platform_settlement(self, settlement_id, update_data):
+        """플랫폼 정산 수정 (매칭 상태 등)."""
+        try:
+            self.client.table("platform_settlements") \
+                .update(update_data).eq("id", settlement_id).execute()
+        except Exception as e:
+            print(f"[DB] update_platform_settlement error: {e}")
+
+    def query_platform_settlement_by_id(self, settlement_id):
+        """플랫폼 정산 1건 조회."""
+        try:
+            res = self.client.table("platform_settlements") \
+                .select("*").eq("id", settlement_id).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[DB] query_platform_settlement_by_id error: {e}")
+            return None
+
+    # ── platform_fee_config ──
+
+    def query_platform_fee_config(self, channel=None):
+        """플랫폼 수수료 설정 조회."""
+        try:
+            q = self.client.table("platform_fee_config") \
+                .select("*").order("channel")
+            if channel:
+                q = q.eq("channel", channel)
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_platform_fee_config error: {e}")
+            return []
 
     # ── 거래처 조회 헬퍼 (기존 autotool business_partners 테이블) ──
 
