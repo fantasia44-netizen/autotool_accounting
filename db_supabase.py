@@ -2848,25 +2848,4 @@ class SupabaseDB(DBBase):
             print(f"[DB] query_partner_by_id error: {e}")
             return None
 
-    def query_partners(self, is_active=True):
-        """거래처 목록 조회."""
-        try:
-            q = self.client.table("business_partners") \
-                .select("*").order("partner_name")
-            if is_active:
-                q = q.eq("is_active", True)
-            res = q.execute()
-            return res.data or []
-        except Exception as e:
-            print(f"[DB] query_partners error: {e}")
-            return []
-
-    def query_default_business(self):
-        """기본 사업장 정보 (settings 또는 하드코딩)."""
-        try:
-            res = self.client.table("business_info") \
-                .select("*").limit(1).execute()
-            return res.data[0] if res.data else None
-        except Exception:
-            # 테이블 없으면 None
-            return None
+    # query_partners, query_default_business → 라인 742, 792에 정의됨 (중복 제거)
