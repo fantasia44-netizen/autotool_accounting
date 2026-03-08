@@ -25,18 +25,42 @@ def index():
 @role_required('admin', 'manager')
 def connect():
     """CODEF 은행 계좌 연결"""
+    import base64
     bank_code = request.form.get('bank_code', '')
+    login_type = request.form.get('login_type', '1')
     login_id = request.form.get('login_id', '')
     login_pw = request.form.get('login_pw', '')
-    login_type = request.form.get('login_type', '1')
 
-    if not bank_code or not login_id or not login_pw:
-        flash('은행, 아이디, 비밀번호를 모두 입력하세요.', 'danger')
+    if not bank_code:
+        flash('은행을 선택하세요.', 'danger')
         return redirect(url_for('bank.index'))
+
+    cert_der_b64 = ''
+    cert_key_b64 = ''
+
+    if login_type == '0':
+        # 공인인증서 모드
+        cert_pw = request.form.get('cert_pw', '')
+        cert_der = request.files.get('cert_der')
+        cert_key = request.files.get('cert_key')
+        if not cert_der or not cert_key or not cert_pw:
+            flash('인증서 파일(.der, .key)과 비밀번호를 모두 입력하세요.', 'danger')
+            return redirect(url_for('bank.index'))
+        cert_der_b64 = base64.b64encode(cert_der.read()).decode('utf-8')
+        cert_key_b64 = base64.b64encode(cert_key.read()).decode('utf-8')
+        login_pw = cert_pw  # 인증서 비밀번호
+    else:
+        # ID/PW 모드
+        if not login_id or not login_pw:
+            flash('아이디와 비밀번호를 모두 입력하세요.', 'danger')
+            return redirect(url_for('bank.index'))
 
     try:
         codef = current_app.codef
-        connected_id = codef.create_connected_id(bank_code, login_type, login_id, login_pw)
+        connected_id = codef.create_connected_id(
+            bank_code, login_type, login_id, login_pw,
+            cert_der_base64=cert_der_b64, cert_key_base64=cert_key_b64,
+        )
 
         # DB에 연결 정보 저장
         current_app.db.insert_codef_connection({
