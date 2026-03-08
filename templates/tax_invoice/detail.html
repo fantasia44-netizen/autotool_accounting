@@ -57,7 +57,7 @@
             </div>
         </div>
 
-        {% if invoice.items %}
+        {% if invoice['items'] %}
         <h6 class="text-muted mb-3">품목 상세</h6>
         <div class="table-responsive">
             <table class="table table-sm table-bordered">
@@ -72,7 +72,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for item in invoice.items %}
+                    {% for item in invoice['items'] %}
                     <tr>
                         <td>{{ loop.index }}</td>
                         <td>{{ item.name or '-' }}</td>
@@ -91,6 +91,7 @@
             {% if invoice.status == 'issued' %}
             <form method="post" action="{{ url_for('tax_invoice.cancel', invoice_id=invoice.id) }}"
                   class="d-inline" onsubmit="return confirm('정말 취소하시겠습니까?')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger btn-sm">
                     <i class="bi bi-x-circle"></i> 발행 취소
                 </button>
