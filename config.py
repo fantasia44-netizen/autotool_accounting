@@ -2,9 +2,8 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
-
 basedir = os.path.abspath(os.path.dirname(__file__))
+load_dotenv(os.path.join(basedir, '.env'))
 
 # Supabase (기존 autotool과 동일 DB)
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
@@ -32,6 +31,7 @@ class Config:
     CODEF_PUBLIC_KEY = os.environ.get('CODEF_PUBLIC_KEY', '')
     CODEF_IS_TEST = os.environ.get('CODEF_IS_TEST', 'true').lower() == 'true'
     CODEF_MODE = os.environ.get('CODEF_MODE', 'sandbox')  # sandbox/demo/product
+    CODEF_CORP_NUM = os.environ.get('CODEF_CORP_NUM', '')  # 해서물산 법인 사업자번호
 
     # ── Popbill (팝빌) 설정 ──
     POPBILL_LINK_ID = os.environ.get('POPBILL_LINK_ID', 'TESTER')

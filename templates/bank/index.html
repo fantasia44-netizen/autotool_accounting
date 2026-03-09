@@ -49,7 +49,7 @@
                             <span class="badge bg-primary">예금</span>
                             {% endif %}
                         </td>
-                        <td>{{ acc.last_synced_at or '-' }}</td>
+                        <td>{{ acc.last_synced_at|fmt_kst }}</td>
                         <td class="text-center">
                             {% if current_user.role in ['admin', 'manager'] %}
                             {% if acc.account_type == '카드' %}

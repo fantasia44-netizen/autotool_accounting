@@ -2,7 +2,6 @@
 card_service.py -- 카드 이용내역 비즈니스 로직.
 CODEF 카드내역 조회 → DB 동기화.
 """
-from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
@@ -71,6 +70,11 @@ def sync_card_transactions(db, codef_svc, bank_account_id):
         else:
             tx_time = time_raw
 
+        # 중복 체크: 동일 기업카드의 복수 카드번호에서 같은 거래 중복 방지
+        if approval_no and db.check_card_transaction_exists(tx_date, approval_no, amount):
+            skipped += 1
+            continue
+
         payload = {
             'bank_account_id': bank_account_id,
             'approval_date': tx_date,
@@ -87,18 +91,19 @@ def sync_card_transactions(db, codef_svc, bank_account_id):
         try:
             db.insert_card_transaction(payload)
             new_count += 1
-        except Exception:
-            skipped += 1  # UNIQUE 중복
+        except Exception as e:
+            logger.error(f"카드거래 저장 실패: {approval_no} ({merchant}) {amount}원 — {e}")
+            skipped += 1  # UNIQUE 중복 또는 기타 오류
 
         if tx_date > latest_date:
             latest_date = tx_date
 
-    # 동기화 시각 업데이트
+    # 동기화 시각 항상 업데이트 (KST) — 신규 0건이어도 동기화 시각 갱신
+    from services.tz_utils import now_kst
+    update_data = {'last_synced_at': now_kst().isoformat()}
     if latest_date:
-        db.update_bank_account(bank_account_id, {
-            'last_synced_at': datetime.utcnow().isoformat(),
-            'last_synced_date': latest_date,
-        })
+        update_data['last_synced_date'] = latest_date
+    db.update_bank_account(bank_account_id, update_data)
 
     logger.info(f"카드 동기화 완료: 카드 {bank_account_id}, 신규 {new_count}건, 스킵 {skipped}건")
     return {'new_count': new_count, 'skipped_count': skipped, 'last_date': latest_date}

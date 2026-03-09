@@ -219,8 +219,10 @@ def get_trial_balance(db, date_from=None, date_to=None):
     Returns:
         list: [{account_code, account_name, category, total_debit, total_credit, balance}]
     """
+    logger.info(f"[시산표] 조회: {date_from or '전체'} ~ {date_to or '전체'}")
     entries = db.query_journal_entries(date_from=date_from, date_to=date_to, status='posted')
     if not entries:
+        logger.info("[시산표] 해당 기간 전표 없음")
         return []
 
     entry_ids = [e['id'] for e in entries]
@@ -265,6 +267,10 @@ def get_trial_balance(db, date_from=None, date_to=None):
             'balance': balance,
         })
 
+    grand_debit = sum(r['total_debit'] for r in result)
+    grand_credit = sum(r['total_credit'] for r in result)
+    logger.info(f"[시산표] {len(result)}개 계정, 차변합계={grand_debit:,} 대변합계={grand_credit:,} "
+                f"{'✓ 일치' if grand_debit == grand_credit else '✗ 불일치!'}")
     return result
 
 

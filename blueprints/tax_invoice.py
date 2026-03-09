@@ -23,15 +23,22 @@ def index():
         date_to=date_to or None,
     )
 
-    sales_total = sum(i.get('total_amount', 0) for i in invoices if i.get('direction') == 'sales')
-    purchase_total = sum(i.get('total_amount', 0) for i in invoices if i.get('direction') == 'purchase')
+    # 취소건 제외한 합계
+    sales_total = sum(i.get('total_amount', 0) for i in invoices
+                      if i.get('direction') == 'sales' and i.get('status') != 'cancelled')
+    purchase_total = sum(i.get('total_amount', 0) for i in invoices
+                         if i.get('direction') == 'purchase' and i.get('status') != 'cancelled')
+
+    # 팝빌 상태는 AJAX로 비동기 로드 (블로킹 방지)
+    show_popbill_status = current_user.role in ('admin', 'manager')
 
     return render_template('tax_invoice/index.html',
                            invoices=invoices,
                            sales_total=sales_total,
                            purchase_total=purchase_total,
                            direction=direction,
-                           date_from=date_from, date_to=date_to)
+                           date_from=date_from, date_to=date_to,
+                           show_popbill_status=show_popbill_status)
 
 
 @tax_invoice_bp.route('/issue', methods=['GET', 'POST'])
@@ -64,11 +71,18 @@ def issue():
 
         # 팝빌 발행 시도
         popbill_result = None
+        cert_error = False
         if current_app.popbill.is_ready:
             try:
                 popbill_result = current_app.popbill.issue_sales_invoice(invoice_data)
             except Exception as e:
-                flash(f'팝빌 발행 오류 (DB에는 저장합니다): {e}', 'warning')
+                if current_app.popbill.is_cert_error(e):
+                    cert_error = True
+                    flash('팝빌 인증서가 등록되지 않았습니다. '
+                          '팝빌 사이트에서 공동인증서를 등록한 후 다시 시도하세요. '
+                          '(DB에는 임시 저장됩니다)', 'warning')
+                else:
+                    flash(f'팝빌 발행 오류 (DB에는 저장합니다): {e}', 'warning')
 
         # DB 저장
         invoice_id = save_invoice_to_db(
@@ -82,8 +96,12 @@ def issue():
         nts = popbill_result.get('nts_confirm_num', '') if popbill_result else ''
         if nts:
             flash(f'세금계산서 발행 완료 (승인번호: {nts})', 'success')
+        elif cert_error:
+            pass  # 위에서 이미 안내함
+        elif not current_app.popbill.is_ready:
+            flash('세금계산서 저장 완료 (팝빌 미연동 — SecretKey 설정 필요)', 'info')
         else:
-            flash(f'세금계산서 저장 완료 (팝빌 미연동 — 키 발급 후 자동 발행됩니다)', 'info')
+            flash('세금계산서 DB 저장 완료 (팝빌 발행 실패 — 수동 발행 필요)', 'info')
 
     except Exception as e:
         flash(f'세금계산서 발행 오류: {e}', 'danger')
@@ -133,6 +151,173 @@ def cancel(invoice_id):
         flash(f'취소 오류: {e}', 'danger')
 
     return redirect(url_for('tax_invoice.index'))
+
+
+@tax_invoice_bp.route('/sync', methods=['POST'])
+@role_required('admin', 'manager')
+def sync():
+    """팝빌에서 세금계산서 동기화 (매출+매입)"""
+    try:
+        from services.tax_invoice_service import sync_all_tax_invoices
+
+        # 동기화 기간 (기본: 3개월)
+        months = int(request.form.get('months', 3))
+        end_date = today_kst().replace('-', '')
+        start_date = days_ago_kst(months * 30).replace('-', '')
+
+        results = sync_all_tax_invoices(
+            current_app.db, current_app.popbill,
+            start_date=start_date, end_date=end_date,
+        )
+
+        sell = results.get('sell', {})
+        buy = results.get('buy', {})
+
+        if sell.get('error') or buy.get('error'):
+            errors = []
+            if sell.get('error'):
+                errors.append(f"매출: {sell['error']}")
+            if buy.get('error'):
+                errors.append(f"매입: {buy['error']}")
+            flash(f'동기화 오류: {"; ".join(errors)}', 'danger')
+        else:
+            sell_new = sell.get('new_count', 0)
+            buy_new = buy.get('new_count', 0)
+            sell_total = sell.get('total_fetched', 0)
+            buy_total = buy.get('total_fetched', 0)
+            flash(
+                f'세금계산서 동기화 완료: '
+                f'매출 {sell_total}건 중 신규 {sell_new}건, '
+                f'매입 {buy_total}건 중 신규 {buy_new}건',
+                'success'
+            )
+
+        _log_action('sync_tax_invoices',
+                    detail=f'매출 신규 {sell.get("new_count", 0)}건, '
+                           f'매입 신규 {buy.get("new_count", 0)}건')
+
+    except Exception as e:
+        flash(f'세금계산서 동기화 오류: {e}', 'danger')
+
+    return redirect(url_for('tax_invoice.index'))
+
+
+@tax_invoice_bp.route('/sync-sell', methods=['POST'])
+@role_required('admin', 'manager')
+def sync_sell():
+    """팝빌에서 매출 세금계산서만 동기화"""
+    try:
+        from services.tax_invoice_service import sync_tax_invoices
+
+        months = int(request.form.get('months', 3))
+        end_date = today_kst().replace('-', '')
+        start_date = days_ago_kst(months * 30).replace('-', '')
+
+        result = sync_tax_invoices(
+            current_app.db, current_app.popbill,
+            start_date, end_date, direction='SELL',
+        )
+
+        flash(
+            f'매출 세금계산서 동기화 완료: '
+            f'{result["total_fetched"]}건 중 신규 {result["new_count"]}건',
+            'success'
+        )
+        _log_action('sync_sell_invoices', detail=f'신규 {result["new_count"]}건')
+
+    except Exception as e:
+        flash(f'매출 동기화 오류: {e}', 'danger')
+
+    return redirect(url_for('tax_invoice.index'))
+
+
+@tax_invoice_bp.route('/sync-buy', methods=['POST'])
+@role_required('admin', 'manager')
+def sync_buy():
+    """팝빌에서 매입 세금계산서만 동기화"""
+    try:
+        from services.tax_invoice_service import sync_tax_invoices
+
+        months = int(request.form.get('months', 3))
+        end_date = today_kst().replace('-', '')
+        start_date = days_ago_kst(months * 30).replace('-', '')
+
+        result = sync_tax_invoices(
+            current_app.db, current_app.popbill,
+            start_date, end_date, direction='BUY',
+        )
+
+        flash(
+            f'매입 세금계산서 동기화 완료: '
+            f'{result["total_fetched"]}건 중 신규 {result["new_count"]}건',
+            'success'
+        )
+        _log_action('sync_buy_invoices', detail=f'신규 {result["new_count"]}건')
+
+    except Exception as e:
+        flash(f'매입 동기화 오류: {e}', 'danger')
+
+    return redirect(url_for('tax_invoice.index'))
+
+
+@tax_invoice_bp.route('/popbill-join', methods=['POST'])
+@role_required('admin')
+def popbill_join():
+    """팝빌 연동회원 가입 (API) — 폼에서 사업장 정보 입력받아 가입."""
+    popbill = current_app.popbill
+
+    if not popbill.is_ready:
+        flash('팝빌 SDK가 초기화되지 않았습니다.', 'danger')
+        return redirect(url_for('tax_invoice.index'))
+
+    corp_num = popbill.corp_num
+    result = popbill.join_member(
+        corp_num=corp_num,
+        corp_name=request.form.get('corp_name', '').strip() or '사업자',
+        ceo_name=request.form.get('ceo_name', '').strip() or '대표자',
+        addr=request.form.get('addr', '').strip() or '-',
+        biz_type=request.form.get('biz_type', '').strip() or '도소매',
+        biz_class=request.form.get('biz_class', '').strip() or '식품',
+        contact_name=request.form.get('contact_name', '').strip() or '',
+        contact_tel=request.form.get('contact_tel', '').strip() or '',
+        contact_email=request.form.get('contact_email', '').strip() or '',
+    )
+
+    if result['success']:
+        flash('팝빌 연동회원 가입 완료! 이제 인증서를 등록하세요.', 'success')
+        _log_action('popbill_join', detail=f'사업자 {corp_num} 팝빌 연동회원 가입')
+    else:
+        flash(f'팝빌 회원가입 결과: {result["message"]}', 'warning')
+
+    return redirect(url_for('tax_invoice.index'))
+
+
+@tax_invoice_bp.route('/api/popbill-status')
+@role_required('admin', 'manager')
+def api_popbill_status():
+    """팝빌 연동 상태 JSON"""
+    status = current_app.popbill.get_status_summary()
+    return jsonify(status)
+
+
+@tax_invoice_bp.route('/api/popbill-cert-url')
+@role_required('admin', 'manager')
+def api_popbill_cert_url():
+    """팝빌 인증서 등록 팝업 URL 발급 (getTaxCertURL)."""
+    popbill = current_app.popbill
+    if not popbill.is_ready:
+        return jsonify({'error': 'Popbill SDK 미초기화'}), 400
+
+    url = popbill.get_tax_cert_url()
+    if url:
+        return jsonify({'url': url})
+
+    # getTaxCertURL 실패 시 getPopbillURL(CERT) 폴백
+    url = popbill.get_cert_url()
+    if url:
+        return jsonify({'url': url})
+
+    return jsonify({'error': '인증서 등록 URL 발급 실패. 팝빌 사이트에서 직접 등록하세요.'}), 500
 
 
 @tax_invoice_bp.route('/api/partners')

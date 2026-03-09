@@ -187,17 +187,26 @@ def sync_account(account_id):
 @bank_bp.route('/sync-all', methods=['POST'])
 @role_required('admin', 'manager')
 def sync_all():
-    """전체 계좌 일괄 동기화"""
+    """전체 계좌 + 카드 일괄 동기화"""
     try:
+        # 은행 계좌 동기화
         from services.bank_service import sync_all_accounts
-        results = sync_all_accounts(current_app.db, current_app.codef)
-        total_new = sum(r.get('new_count', 0) for r in results)
-        _log_action('sync_bank_all',
-                    detail=f'{len(results)}개 계좌, 신규 {total_new}건')
-        flash(f'전체 동기화 완료: {len(results)}개 계좌, 신규 {total_new}건', 'success')
+        bank_results = sync_all_accounts(current_app.db, current_app.codef)
+        bank_new = sum(r.get('new_count', 0) for r in bank_results)
+
+        # 카드 동기화
+        from services.card_service import sync_all_card_accounts
+        card_results = sync_all_card_accounts(current_app.db, current_app.codef)
+        card_new = sum(r.get('new_count', 0) for r in card_results)
+
+        _log_action('sync_all',
+                    detail=f'은행 {len(bank_results)}개 신규 {bank_new}건, '
+                           f'카드 {len(card_results)}개 신규 {card_new}건')
+        flash(f'전체 동기화 완료: 은행 {len(bank_results)}개({bank_new}건), '
+              f'카드 {len(card_results)}개({card_new}건)', 'success')
     except Exception as e:
         flash(f'전체 동기화 오류: {e}', 'danger')
-    return redirect(url_for('bank.transactions'))
+    return redirect(url_for('bank.index'))
 
 
 @bank_bp.route('/api/transaction/<int:tx_id>/category', methods=['PUT'])

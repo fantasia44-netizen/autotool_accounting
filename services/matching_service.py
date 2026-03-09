@@ -160,7 +160,9 @@ def confirm_match(db, tax_invoice_id, bank_transaction_id, matched_by=''):
     db.update_tax_invoice(tax_invoice_id, {'matched_transaction_id': bank_transaction_id})
     db.update_bank_transaction(bank_transaction_id, {'matched_invoice_id': tax_invoice_id})
 
-    logger.info(f"매칭 확정: 세금계산서 {tax_invoice_id} ↔ 거래 {bank_transaction_id}")
+    status = 'matched' if inv_amount == tx_amount else 'partial'
+    logger.info(f"[매칭확정] 세금계산서 {tax_invoice_id} ↔ 거래 {bank_transaction_id} | "
+                f"{inv.get('buyer_corp_name', '')} | {inv_amount:,}원 | 상태={status}")
 
     # ── 입금 전표 자동 생성 ──
     if match_id:
@@ -221,7 +223,8 @@ def unmatch(db, match_id):
         db.update_bank_transaction(match['bank_transaction_id'], {'matched_invoice_id': None})
 
     db.delete_payment_match(match_id)
-    logger.info(f"매칭 해제: {match_id}")
+    logger.info(f"[매칭해제] ID={match_id} | 세금계산서={match.get('tax_invoice_id')} | "
+                f"거래={match.get('bank_transaction_id')} | 금액={match.get('matched_amount', 0):,}원")
 
     # ── 매칭 관련 전표 역분개 ──
     try:
@@ -470,7 +473,8 @@ def confirm_payable_match(db, tax_invoice_id, bank_transaction_id, matched_by=''
     db.update_tax_invoice(tax_invoice_id, {'matched_transaction_id': bank_transaction_id})
     db.update_bank_transaction(bank_transaction_id, {'matched_invoice_id': tax_invoice_id})
 
-    logger.info(f"매입-출금 매칭 확정: 세금계산서 {tax_invoice_id} ↔ 거래 {bank_transaction_id}")
+    logger.info(f"[매입매칭확정] 세금계산서 {tax_invoice_id} ↔ 거래 {bank_transaction_id} | "
+                f"{inv.get('supplier_corp_name', '')} | {inv_amount:,}원")
 
     # ── 지급 전표 자동 생성 ──
     if match_id:
@@ -538,7 +542,8 @@ def confirm_settlement_match(db, settlement_id, bank_transaction_id, matched_by=
         'matched_settlement_id': settlement_id,
     })
 
-    logger.info(f"정산-입금 매칭 확정: 정산 {settlement_id} ↔ 거래 {bank_transaction_id}")
+    logger.info(f"[정산매칭확정] 정산 {settlement_id} ↔ 거래 {bank_transaction_id} | "
+                f"{tx.get('counterpart_name', '')} | {tx.get('amount', 0):,}원")
 
     # ── 정산 입금 전표 자동 생성 ──
     if match_id:

@@ -36,6 +36,8 @@ def sync_platform_settlements(db, channel, date_from, date_to):
         logger.info(f"[정산] {channel} {date_from}~{date_to}: 주문 데이터 없음")
         return {'created_count': 0, 'updated_count': 0, 'total_settlement': 0}
 
+    logger.info(f"[정산] {channel} 주문 {len(orders)}건 조회 ({date_from}~{date_to})")
+
     # 2. 수수료율 조회
     fee_configs = db.query_platform_fee_config(channel=channel)
     sales_commission_rate = 0
@@ -43,6 +45,8 @@ def sync_platform_settlements(db, channel, date_from, date_to):
         if fc.get('fee_type') == 'sales_commission':
             sales_commission_rate = float(fc.get('rate', 0))
             break
+
+    logger.info(f"[정산] {channel} 수수료율: {sales_commission_rate}%")
 
     # 3. 날짜별로 집계
     by_date = {}
@@ -104,6 +108,8 @@ def sync_platform_settlements(db, channel, date_from, date_to):
         db.insert_platform_settlement(payload)
         created += 1
         total_settlement += net
+        logger.debug(f"[정산] {channel} {settle_date}: 매출={gross:,}원, "
+                     f"수수료={platform_fee:,}원, 정산={net:,}원")
 
     logger.info(
         f"[정산] {channel} {date_from}~{date_to}: "

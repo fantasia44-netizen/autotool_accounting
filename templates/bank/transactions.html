@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block page_title %}거래내역{% endblock %}
+{% block page_title %}은행 거래내역{% endblock %}
 
 {% block content %}
 <!-- 필터 바 -->
@@ -21,7 +21,7 @@
                     <option value="">전체 계좌</option>
                     {% for acc in accounts %}
                     <option value="{{ acc.id }}" {% if account_id|string == acc.id|string %}selected{% endif %}>
-                        {{ acc.bank_name }} {{ acc.account_number }}
+                        {{ acc.bank_name }} ({{ acc.account_number[-4:] }})
                     </option>
                     {% endfor %}
                 </select>
@@ -33,6 +33,11 @@
                     <option value="{{ t }}" {% if tx_type == t %}selected{% endif %}>{{ t }}</option>
                     {% endfor %}
                 </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label small mb-0">상대방 검색</label>
+                <input type="text" name="search" class="form-control form-control-sm"
+                       value="{{ search or '' }}" placeholder="이름, 적요 검색...">
             </div>
             <div class="col-auto">
                 <button type="submit" class="btn btn-primary btn-sm">
@@ -65,7 +70,9 @@
         <div class="card shadow-sm border-start border-success border-3">
             <div class="card-body py-3">
                 <div class="text-muted small">순수입</div>
-                <div class="fs-5 fw-bold text-success">{{ summary.net|fmt_money }}원</div>
+                <div class="fs-5 fw-bold {% if summary.net >= 0 %}text-success{% else %}text-danger{% endif %}">
+                    {{ summary.net|fmt_money }}원
+                </div>
             </div>
         </div>
     </div>
@@ -74,20 +81,22 @@
 <!-- 거래내역 테이블 -->
 <div class="card shadow-sm">
     <div class="card-header bg-white d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-cash-stack"></i> 거래내역</span>
+        <span><i class="bi bi-cash-stack"></i> 은행 거래내역</span>
         <span class="badge bg-secondary">{{ transactions|length }}건</span>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
-            <table class="table table-hover mb-0">
+            <table class="table table-hover table-sm mb-0">
                 <thead class="table-light">
                     <tr>
                         <th>날짜</th>
                         <th>시간</th>
+                        <th>계좌</th>
                         <th class="text-center">구분</th>
                         <th class="text-end">금액</th>
                         <th class="text-end">잔액</th>
                         <th>상대방</th>
+                        <th>적요</th>
                         <th>분류</th>
                         <th class="text-center">매칭</th>
                     </tr>
@@ -95,8 +104,9 @@
                 <tbody>
                     {% for tx in transactions %}
                     <tr>
-                        <td>{{ tx.transaction_date }}</td>
+                        <td class="small">{{ tx.transaction_date }}</td>
                         <td class="text-muted small">{{ tx.transaction_time or '' }}</td>
+                        <td class="small">{{ tx.bank_accounts.bank_name if tx.bank_accounts else '' }}</td>
                         <td class="text-center">
                             {% if tx.transaction_type == '입금' %}
                             <span class="badge bg-primary">입금</span>
@@ -107,13 +117,13 @@
                         <td class="text-end fw-bold {% if tx.transaction_type == '입금' %}text-primary{% else %}text-danger{% endif %}">
                             {{ tx.amount|fmt_money }}원
                         </td>
-                        <td class="text-end text-muted">{{ tx.balance|fmt_money }}원</td>
-                        <td>{{ tx.counterpart or '-' }}</td>
+                        <td class="text-end text-muted small">{{ tx.balance|fmt_money }}원</td>
+                        <td>{{ tx.counterpart_name or '-' }}</td>
+                        <td class="text-muted small">{{ tx.description or '' }}</td>
                         <td>
                             <select class="form-select form-select-sm category-select"
-                                    data-tx-id="{{ tx.id }}"
-                                    style="min-width:110px">
-                                {% for cat in ['', '매출', '매입', '급여', '임대료', '세금', '수수료', '기타'] %}
+                                    data-tx-id="{{ tx.id }}" style="min-width:100px; font-size:0.8rem">
+                                {% for cat in categories %}
                                 <option value="{{ cat }}" {% if tx.category == cat %}selected{% endif %}>
                                     {{ cat or '미분류' }}
                                 </option>
@@ -121,16 +131,16 @@
                             </select>
                         </td>
                         <td class="text-center">
-                            {% if tx.is_matched %}
+                            {% if tx.matched_invoice_id or tx.matched_settlement_id %}
                             <span class="badge bg-success"><i class="bi bi-check-circle"></i></span>
                             {% else %}
-                            <span class="badge bg-secondary"><i class="bi bi-dash-circle"></i></span>
+                            <span class="badge bg-light text-muted"><i class="bi bi-dash-circle"></i></span>
                             {% endif %}
                         </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="8" class="text-center text-muted py-4">
+                        <td colspan="10" class="text-center text-muted py-4">
                             데이터가 없습니다.
                         </td>
                     </tr>

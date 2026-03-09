@@ -168,6 +168,7 @@ def create_app(config_class=None):
             {'name': '리포트', 'icon': 'bi-file-earmark-bar-graph', 'url': '/accounting/reports', 'group': '리포트'},
             {'name': '전표관리', 'icon': 'bi-journal-text', 'url': '/journal/', 'group': '회계'},
             {'name': '시산표', 'icon': 'bi-table', 'url': '/journal/trial-balance', 'group': '회계'},
+            {'name': '대조표', 'icon': 'bi-clipboard-check', 'url': '/accounting/reconciliation', 'group': '회계'},
         ]
         # 그룹별 분류
         groups = {}
