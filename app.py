@@ -158,6 +158,7 @@ def create_app(config_class=None):
             {'name': '회계 대시보드', 'icon': 'bi-graph-up-arrow', 'url': '/accounting', 'group': '회계'},
             {'name': '은행 관리', 'icon': 'bi-bank', 'url': '/bank', 'group': '은행'},
             {'name': '거래내역', 'icon': 'bi-cash-stack', 'url': '/bank/transactions', 'group': '은행'},
+            {'name': '카드내역', 'icon': 'bi-credit-card', 'url': '/bank/card-transactions', 'group': '은행'},
             {'name': '세금계산서', 'icon': 'bi-receipt', 'url': '/tax-invoice', 'group': '세금계산서'},
             {'name': '세금계산서 발행', 'icon': 'bi-plus-circle', 'url': '/tax-invoice/issue', 'group': '세금계산서'},
             {'name': '매출-입금 매칭', 'icon': 'bi-link-45deg', 'url': '/accounting/matching', 'group': '매칭'},

@@ -2606,7 +2606,9 @@ class SupabaseDB(DBBase):
         """은행 거래내역 조회 (필터)."""
         try:
             q = self.client.table("bank_transactions") \
-                .select("*").order("transaction_date", desc=True)
+                .select("*, bank_accounts(bank_name, account_number)") \
+                .order("transaction_date", desc=True) \
+                .order("transaction_time", desc=True)
             if date_from:
                 q = q.gte("transaction_date", date_from)
             if date_to:
@@ -2640,6 +2642,18 @@ class SupabaseDB(DBBase):
         """은행 거래내역 1건 등록."""
         self.client.table("bank_transactions").insert(payload).execute()
 
+    def delete_all_bank_transactions(self, bank_account_id=None):
+        """은행 거래내역 전체 삭제 (재동기화용)."""
+        try:
+            q = self.client.table("bank_transactions")
+            if bank_account_id:
+                q = q.delete().eq("bank_account_id", bank_account_id)
+            else:
+                q = q.delete().neq("id", 0)  # 전체 삭제
+            q.execute()
+        except Exception as e:
+            print(f"[DB] delete_all_bank_transactions error: {e}")
+
     def update_bank_transaction(self, tx_id, update_data):
         """은행 거래내역 수정 (카테고리 분류 등)."""
         try:
@@ -2647,6 +2661,57 @@ class SupabaseDB(DBBase):
                 .update(update_data).eq("id", tx_id).execute()
         except Exception as e:
             print(f"[DB] update_bank_transaction error: {e}")
+
+    # ── card_transactions ──
+
+    def query_card_transactions(self, date_from=None, date_to=None,
+                                 bank_account_id=None, category=None,
+                                 search=None):
+        """카드 이용내역 목록 조회."""
+        try:
+            q = self.client.table("card_transactions") \
+                .select("*, bank_accounts(bank_name, account_number)") \
+                .order("approval_date", desc=True) \
+                .order("approval_time", desc=True)
+            if date_from:
+                q = q.gte("approval_date", date_from)
+            if date_to:
+                q = q.lte("approval_date", date_to)
+            if bank_account_id:
+                q = q.eq("bank_account_id", bank_account_id)
+            if category and category != '전체':
+                q = q.eq("category", category)
+            if search:
+                q = q.ilike("merchant_name", f"%{search}%")
+            res = q.execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[DB] query_card_transactions error: {e}")
+            return []
+
+    def insert_card_transaction(self, payload):
+        """카드 이용내역 1건 등록."""
+        self.client.table("card_transactions").insert(payload).execute()
+
+    def update_card_transaction(self, tx_id, update_data):
+        """카드 이용내역 수정 (카테고리 분류 등)."""
+        try:
+            self.client.table("card_transactions") \
+                .update(update_data).eq("id", tx_id).execute()
+        except Exception as e:
+            print(f"[DB] update_card_transaction error: {e}")
+
+    def delete_all_card_transactions(self, bank_account_id=None):
+        """카드 이용내역 전체 삭제."""
+        try:
+            q = self.client.table("card_transactions")
+            if bank_account_id:
+                q = q.delete().eq("bank_account_id", bank_account_id)
+            else:
+                q = q.delete().neq("id", 0)
+            q.execute()
+        except Exception as e:
+            print(f"[DB] delete_all_card_transactions error: {e}")
 
     # ── tax_invoices ──
 
