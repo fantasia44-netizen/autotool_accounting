@@ -17,7 +17,7 @@ def generate_mgt_key():
     return f'AT{now}{short_uid}'
 
 
-def build_invoice_from_trade(db, partner_id, trade_date, items):
+def build_invoice_from_trade(db, partner_id, trade_date, items, tax_type='과세'):
     """거래 데이터 → 세금계산서 발행 데이터 빌드.
 
     Args:
@@ -25,6 +25,7 @@ def build_invoice_from_trade(db, partner_id, trade_date, items):
         partner_id: 거래처 ID (business_partners)
         trade_date: 작성일자 (YYYY-MM-DD)
         items: list of {product_name, qty, unit_price}
+        tax_type: '과세' | '면세' | '영세'
 
     Returns:
         dict: issue_sales_invoice()에 전달할 형태
@@ -37,13 +38,16 @@ def build_invoice_from_trade(db, partner_id, trade_date, items):
     # 우리 사업장 정보
     my_biz = db.query_default_business()
 
+    # 면세/영세는 부가세 0%
+    vat_rate = 0.1 if tax_type == '과세' else 0
+
     detail_items = []
     supply_total = 0
     for item in items:
         qty = int(item.get('qty', 0))
         unit_cost = int(item.get('unit_price', 0))
         supply = qty * unit_cost
-        tax = int(supply * 0.1)  # 부가세 10%
+        tax = int(supply * vat_rate)
         supply_total += supply
         detail_items.append({
             'name': item.get('product_name', ''),
@@ -53,11 +57,12 @@ def build_invoice_from_trade(db, partner_id, trade_date, items):
             'tax': tax,
         })
 
-    tax_total = int(supply_total * 0.1)
+    tax_total = int(supply_total * vat_rate)
     write_date = trade_date.replace('-', '')  # YYYYMMDD
 
     return {
         'write_date': write_date,
+        'tax_type': tax_type,
         'mgt_key': generate_mgt_key(),
         'buyer_corp_num': partner.get('business_number', '').replace('-', ''),
         'buyer_corp_name': partner.get('partner_name', ''),

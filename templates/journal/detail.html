@@ -57,7 +57,7 @@
             </div>
             <div class="col-md-2">
                 <small class="text-muted">생성일시</small>
-                <div class="small">{{ entry.created_at[:16] if entry.created_at else '-' }}</div>
+                <div class="small">{{ entry.created_at|fmt_kst }}</div>
             </div>
         </div>
         {% if entry.ref_type %}

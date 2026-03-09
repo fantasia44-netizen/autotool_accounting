@@ -130,8 +130,26 @@ def create_app(config_class=None):
         except (ValueError, TypeError):
             return str(val) if val else '0'
 
+    def fmt_datetime_kst(val):
+        """UTC 타임스탬프 → KST 변환 (YYYY-MM-DD HH:MM)"""
+        if not val:
+            return '-'
+        try:
+            from services.tz_utils import KST
+            from datetime import datetime
+            if isinstance(val, str):
+                dt = datetime.fromisoformat(val.replace('Z', '+00:00'))
+            elif hasattr(val, 'astimezone'):
+                dt = val
+            else:
+                return str(val)[:16]
+            return dt.astimezone(KST).strftime('%Y-%m-%d %H:%M')
+        except Exception:
+            return str(val)[:16]
+
     app.jinja_env.filters['fmt_money'] = fmt_money
     app.jinja_env.filters['fmt_qty'] = fmt_qty
+    app.jinja_env.filters['fmt_kst'] = fmt_datetime_kst
 
     # ── context processor (사이드바 메뉴) ──
     @app.context_processor

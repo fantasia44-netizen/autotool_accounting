@@ -52,6 +52,7 @@ def issue():
 
         partner_id = int(request.form.get('partner_id', 0))
         trade_date = request.form.get('write_date', today_kst())
+        tax_type = request.form.get('tax_type', '과세')
         items_json = request.form.get('items', '[]')
         items = json.loads(items_json)
 
@@ -59,7 +60,7 @@ def issue():
             flash('품목을 추가하세요.', 'danger')
             return redirect(url_for('tax_invoice.issue'))
 
-        invoice_data = build_invoice_from_trade(db, partner_id, trade_date, items)
+        invoice_data = build_invoice_from_trade(db, partner_id, trade_date, items, tax_type=tax_type)
 
         # 팝빌 발행 시도
         popbill_result = None
