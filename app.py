@@ -103,8 +103,9 @@ def create_app(config_class=None):
     from blueprints.bank import bank_bp
     from blueprints.tax_invoice import tax_invoice_bp
     from blueprints.accounting import accounting_bp
+    from blueprints.journal import journal_bp
 
-    for bp in [auth_bp, bank_bp, tax_invoice_bp, accounting_bp]:
+    for bp in [auth_bp, bank_bp, tax_invoice_bp, accounting_bp, journal_bp]:
         app.register_blueprint(bp)
 
     # ── 메인 리다이렉트 ──
@@ -146,6 +147,8 @@ def create_app(config_class=None):
             {'name': '미지급금 관리', 'icon': 'bi-cash-coin', 'url': '/accounting/payables', 'group': '매칭'},
             {'name': '플랫폼 정산', 'icon': 'bi-shop', 'url': '/accounting/settlements', 'group': '정산'},
             {'name': '리포트', 'icon': 'bi-file-earmark-bar-graph', 'url': '/accounting/reports', 'group': '리포트'},
+            {'name': '전표관리', 'icon': 'bi-journal-text', 'url': '/journal/', 'group': '회계'},
+            {'name': '시산표', 'icon': 'bi-table', 'url': '/journal/trial-balance', 'group': '회계'},
         ]
         # 그룹별 분류
         groups = {}

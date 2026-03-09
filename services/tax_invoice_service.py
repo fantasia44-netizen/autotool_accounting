@@ -112,4 +112,18 @@ def save_invoice_to_db(db, invoice_data, direction, popbill_result=None, registe
     }
     invoice_id = db.insert_tax_invoice(payload)
     logger.info(f"세금계산서 DB 저장: ID={invoice_id}, 방향={direction}")
+
+    # ── 자동 전표 생성 ──
+    if invoice_id:
+        try:
+            from services.journal_service import (
+                create_sales_invoice_journal, create_purchase_invoice_journal,
+            )
+            if direction == 'sales':
+                create_sales_invoice_journal(db, invoice_id, created_by=registered_by or 'system')
+            elif direction == 'purchase':
+                create_purchase_invoice_journal(db, invoice_id, created_by=registered_by or 'system')
+        except Exception as e:
+            logger.error(f"세금계산서 자동 전표 생성 실패 (ID={invoice_id}): {e}")
+
     return invoice_id
