@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PackFlow - 3PL 물류 운영 통합 SaaS</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary: #0f172a;
+            --accent: #06b6d4;
+            --bg-light: #f8fafc;
+            --text-muted: #64748b;
+        }
+
+        body {
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #1e293b;
+        }
+
+        /* ── Navbar ── */
+        .navbar-landing {
+            background: rgba(255,255,255,0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .navbar-landing .navbar-brand {
+            font-weight: 800;
+            font-size: 1.5rem;
+            color: var(--primary);
+        }
+        .navbar-landing .nav-link {
+            color: var(--secondary);
+            font-weight: 500;
+        }
+
+        /* ── Hero ── */
+        .hero-section {
+            background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 50%, #ecfeff 100%);
+            padding: 120px 0 80px;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero-section::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(37,99,235,0.08) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+        .hero-badge {
+            display: inline-block;
+            background: rgba(37,99,235,0.1);
+            color: var(--primary);
+            font-size: 0.85rem;
+            font-weight: 600;
+            padding: 6px 16px;
+            border-radius: 50px;
+            margin-bottom: 1.5rem;
+        }
+        .hero-title {
+            font-size: 3rem;
+            font-weight: 800;
+            line-height: 1.2;
+            color: var(--secondary);
+            margin-bottom: 1.5rem;
+        }
+        .hero-title .highlight {
+            color: var(--primary);
+        }
+        .hero-desc {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            line-height: 1.8;
+            margin-bottom: 2rem;
+        }
+        .hero-img {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+            padding: 16px;
+            position: relative;
+            z-index: 1;
+        }
+        .hero-img img {
+            width: 100%;
+            border-radius: 8px;
+        }
+
+        /* ── Buttons ── */
+        .btn-hero {
+            background: var(--primary);
+            color: white;
+            padding: 14px 32px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            border-radius: 12px;
+            border: none;
+            transition: all 0.2s;
+        }
+        .btn-hero:hover {
+            background: var(--primary-dark);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(37,99,235,0.3);
+        }
+        .btn-outline-hero {
+            background: white;
+            color: var(--secondary);
+            padding: 14px 32px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+            transition: all 0.2s;
+        }
+        .btn-outline-hero:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        /* ── Section ── */
+        .section {
+            padding: 100px 0;
+        }
+        .section-badge {
+            display: inline-block;
+            background: rgba(37,99,235,0.1);
+            color: var(--primary);
+            font-size: 0.8rem;
+            font-weight: 700;
+            padding: 5px 14px;
+            border-radius: 50px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+        .section-title {
+            font-size: 2.2rem;
+            font-weight: 800;
+            color: var(--secondary);
+            margin-bottom: 1rem;
+        }
+        .section-desc {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            max-width: 600px;
+        }
+        .bg-section {
+            background: var(--bg-light);
+        }
+
+        /* ── Problem ── */
+        .problem-card {
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 32px;
+            height: 100%;
+            transition: all 0.2s;
+        }
+        .problem-card:hover {
+            border-color: #fca5a5;
+            box-shadow: 0 4px 20px rgba(239,68,68,0.08);
+        }
+        .problem-icon {
+            width: 48px;
+            height: 48px;
+            background: #fef2f2;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            color: #ef4444;
+            margin-bottom: 1rem;
+        }
+        .problem-card h5 {
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        .problem-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin: 0;
+        }
+
+        /* ── Features ── */
+        .feature-card {
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 40px 32px;
+            height: 100%;
+            transition: all 0.3s;
+        }
+        .feature-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 8px 30px rgba(37,99,235,0.1);
+            transform: translateY(-4px);
+        }
+        .feature-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.6rem;
+            margin-bottom: 1.5rem;
+        }
+        .feature-icon-blue { background: #eff6ff; color: var(--primary); }
+        .feature-icon-green { background: #ecfdf5; color: #059669; }
+        .feature-icon-purple { background: #f5f3ff; color: #7c3aed; }
+        .feature-icon-cyan { background: #ecfeff; color: #0891b2; }
+        .feature-card h5 {
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+        }
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.7;
+        }
+        .feature-tag {
+            display: inline-block;
+            background: #eff6ff;
+            color: var(--primary);
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 6px;
+            margin-top: 0.5rem;
+        }
+
+        /* ── UI Showcase ── */
+        .showcase-mockup {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.08);
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+        }
+        .showcase-titlebar {
+            background: #f1f5f9;
+            padding: 12px 16px;
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .showcase-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+        .showcase-body {
+            padding: 24px;
+            min-height: 300px;
+            background: #fafbfc;
+        }
+
+        /* ── Workflow ── */
+        .workflow-step {
+            text-align: center;
+            padding: 24px;
+        }
+        .workflow-num {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1.2rem;
+            margin: 0 auto 1rem;
+        }
+        .workflow-arrow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #cbd5e1;
+            font-size: 1.5rem;
+        }
+
+        /* ── Pricing ── */
+        .pricing-card {
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 40px 32px;
+            text-align: center;
+            height: 100%;
+            transition: all 0.3s;
+        }
+        .pricing-card.popular {
+            border-color: var(--primary);
+            box-shadow: 0 8px 30px rgba(37,99,235,0.15);
+            position: relative;
+        }
+        .pricing-popular-badge {
+            position: absolute;
+            top: -14px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--primary);
+            color: white;
+            font-size: 0.8rem;
+            font-weight: 700;
+            padding: 4px 20px;
+            border-radius: 50px;
+        }
+        .pricing-name {
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        .pricing-price {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--secondary);
+        }
+        .pricing-price small {
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+        .pricing-features {
+            list-style: none;
+            padding: 0;
+            text-align: left;
+            margin: 1.5rem 0;
+        }
+        .pricing-features li {
+            padding: 8px 0;
+            font-size: 0.95rem;
+            color: #475569;
+        }
+        .pricing-features li i {
+            color: var(--primary);
+            margin-right: 8px;
+        }
+
+        /* ── CTA ── */
+        .cta-section {
+            background: linear-gradient(135deg, var(--secondary) 0%, #1e3a5f 100%);
+            padding: 80px 0;
+            text-align: center;
+        }
+        .cta-section h2 {
+            color: white;
+            font-weight: 800;
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+        .cta-section p {
+            color: #94a3b8;
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+
+        /* ── FAQ ── */
+        .faq-item {
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+        .faq-item .accordion-button {
+            font-weight: 600;
+            font-size: 1rem;
+            background: white;
+            box-shadow: none;
+        }
+        .faq-item .accordion-button:not(.collapsed) {
+            color: var(--primary);
+            background: #f8fafc;
+        }
+
+        /* ── Footer ── */
+        .footer {
+            background: var(--secondary);
+            color: #94a3b8;
+            padding: 60px 0 30px;
+        }
+        .footer h6 {
+            color: white;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+        .footer a {
+            color: #94a3b8;
+            text-decoration: none;
+            display: block;
+            padding: 4px 0;
+            font-size: 0.9rem;
+        }
+        .footer a:hover { color: white; }
+
+        /* ── Responsive ── */
+        @media (max-width: 768px) {
+            .hero-title { font-size: 2rem; }
+            .section-title { font-size: 1.7rem; }
+            .hero-section { padding: 100px 0 60px; }
+            .section { padding: 60px 0; }
+            .workflow-arrow { transform: rotate(90deg); }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ══════════ Navbar ══════════ -->
+<nav class="navbar navbar-expand-lg navbar-landing fixed-top">
+    <div class="container">
+        <a class="navbar-brand" href="#">
+            <i class="bi bi-box-seam-fill"></i> PackFlow
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navMenu">
+            <ul class="navbar-nav ms-auto me-3">
+                <li class="nav-item"><a class="nav-link" href="#features">기능</a></li>
+                <li class="nav-item"><a class="nav-link" href="#workflow">작동방식</a></li>
+                <li class="nav-item"><a class="nav-link" href="#pricing">요금제</a></li>
+                <li class="nav-item"><a class="nav-link" href="#faq">FAQ</a></li>
+            </ul>
+            <a href="/login" class="btn btn-hero btn-sm" style="padding:10px 24px;font-size:0.9rem;">무료 체험</a>
+        </div>
+    </div>
+</nav>
+
+<!-- ══════════ Hero ══════════ -->
+<section class="hero-section">
+    <div class="container">
+        <div class="row align-items-center">
+            <div class="col-lg-6">
+                <span class="hero-badge">3PL 물류대행사를 위해 만들었습니다</span>
+                <h1 class="hero-title">
+                    당신의 고객과 재고를<br>
+                    <span class="highlight">안심하고 맡길 수 있도록</span>
+                </h1>
+                <p class="hero-desc">
+                    고객사의 재고가 곧 고객사의 재산입니다.<br>
+                    재고 관리, 클레임 대비 영상 증빙, 고객사 전용 포털까지 —<br>
+                    3PL사의 고충을 모두 담아 만든 전용 시스템입니다.
+                </p>
+                <div class="d-flex gap-3 flex-wrap">
+                    <a href="#contact" class="btn btn-hero">데모 요청하기</a>
+                    <a href="#features" class="btn btn-outline-hero">기능 보기</a>
+                </div>
+                <div class="mt-4">
+                    <small class="text-muted">
+                        <i class="bi bi-check-circle-fill text-success"></i> 설치 없이 바로 시작
+                        <span class="mx-2">|</span>
+                        <i class="bi bi-check-circle-fill text-success"></i> 14일 무료 체험
+                    </small>
+                </div>
+            </div>
+            <div class="col-lg-6 mt-4 mt-lg-0">
+                <div class="hero-img">
+                    <!-- 실제 UI 스크린샷 자리 -->
+                    <div style="background:linear-gradient(135deg,#eff6ff,#ecfeff);border-radius:8px;padding:40px;min-height:350px;">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="mb-0 fw-bold">오늘의 현황</h6>
+                            <span class="badge bg-primary">Live</span>
+                        </div>
+                        <div class="row g-2 mb-3">
+                            <div class="col-6"><div class="bg-white rounded-3 p-3 text-center"><small class="text-muted">신규 주문</small><h4 class="mb-0 text-primary fw-bold">127</h4></div></div>
+                            <div class="col-6"><div class="bg-white rounded-3 p-3 text-center"><small class="text-muted">출고 완료</small><h4 class="mb-0 text-success fw-bold">98</h4></div></div>
+                            <div class="col-6"><div class="bg-white rounded-3 p-3 text-center"><small class="text-muted">패킹 대기</small><h4 class="mb-0 text-warning fw-bold">29</h4></div></div>
+                            <div class="col-6"><div class="bg-white rounded-3 p-3 text-center"><small class="text-muted">총 SKU</small><h4 class="mb-0 fw-bold">1,842</h4></div></div>
+                        </div>
+                        <div class="bg-white rounded-3 p-3">
+                            <div class="d-flex justify-content-between mb-2"><small class="fw-bold">출고율</small><small class="text-primary fw-bold">77%</small></div>
+                            <div class="progress" style="height:8px;"><div class="progress-bar bg-primary" style="width:77%"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ Problem ══════════ -->
+<section class="section" id="problem">
+    <div class="container">
+        <div class="text-center mb-5">
+            <span class="section-badge">Problem</span>
+            <h2 class="section-title">고객사의 재고를 지키는 일, 쉽지 않으셨죠?</h2>
+            <p class="section-desc mx-auto">고객사의 재고는 곧 고객사의 재산입니다. 그 재산을 맡은 당신의 신뢰를 지켜야 합니다.</p>
+        </div>
+        <div class="row g-4">
+            <div class="col-md-6 col-lg-3">
+                <div class="problem-card">
+                    <div class="problem-icon"><i class="bi bi-exclamation-triangle"></i></div>
+                    <h5>고객의 재산이 불투명</h5>
+                    <p>엑셀과 실재고가 달라 고객사에 정확한 재고를 알려줄 수 없습니다. 신뢰가 깨집니다.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="problem-card">
+                    <div class="problem-icon"><i class="bi bi-arrow-repeat"></i></div>
+                    <h5>오배송은 곧 신뢰 상실</h5>
+                    <p>수작업 피킹으로 잘못된 상품이 나가면, 고객사의 고객까지 잃게 됩니다.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="problem-card">
+                    <div class="problem-icon"><i class="bi bi-telephone-x"></i></div>
+                    <h5>매일 쏟아지는 확인 요청</h5>
+                    <p>"내 재고 얼마나 남았어요?" 고객사가 직접 확인할 방법이 없으니 전화가 끊이지 않습니다.</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="problem-card">
+                    <div class="problem-icon"><i class="bi bi-camera-video-off"></i></div>
+                    <h5>억울한 클레임</h5>
+                    <p>분명히 제대로 보냈는데 증빙이 없습니다. 파손/분실 클레임에 속수무책입니다.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ Solution ══════════ -->
+<section class="section bg-section">
+    <div class="container">
+        <div class="row align-items-center">
+            <div class="col-lg-5">
+                <span class="section-badge">Solution</span>
+                <h2 class="section-title">고객사의 재산과 신뢰,<br>PackFlow가 지켜드립니다</h2>
+                <p class="section-desc">
+                    3PL 현장의 고충을 모두 녹여 만들었습니다.
+                    고객 관리, 재고 관리, 클레임 대비까지 — 당신을 위한 시스템입니다.
+                </p>
+                <div class="mt-4">
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="me-3" style="width:40px;height:40px;background:#ecfdf5;border-radius:10px;display:flex;align-items:center;justify-content:center;"><i class="bi bi-check-lg text-success"></i></div>
+                        <div><strong>고객사 재산을 투명하게</strong><br><small class="text-muted">실시간 재고 동기화로 정확한 재고 관리</small></div>
+                    </div>
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="me-3" style="width:40px;height:40px;background:#ecfdf5;border-radius:10px;display:flex;align-items:center;justify-content:center;"><i class="bi bi-check-lg text-success"></i></div>
+                        <div><strong>신뢰를 지키는 검수 시스템</strong><br><small class="text-muted">바코드 스캔으로 오배송 방지</small></div>
+                    </div>
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="me-3" style="width:40px;height:40px;background:#ecfdf5;border-radius:10px;display:flex;align-items:center;justify-content:center;"><i class="bi bi-check-lg text-success"></i></div>
+                        <div><strong>고객사가 직접 확인</strong><br><small class="text-muted">전용 포털로 재고/출고 실시간 조회</small></div>
+                    </div>
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="me-3" style="width:40px;height:40px;background:#ecfdf5;border-radius:10px;display:flex;align-items:center;justify-content:center;"><i class="bi bi-check-lg text-success"></i></div>
+                        <div><strong>영상으로 증명</strong><br><small class="text-muted">출고 과정 자동 녹화로 클레임 완벽 대응</small></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-7 mt-4 mt-lg-0">
+                <div class="showcase-mockup">
+                    <div class="showcase-titlebar">
+                        <div class="showcase-dot" style="background:#ff5f57;"></div>
+                        <div class="showcase-dot" style="background:#ffbd2e;"></div>
+                        <div class="showcase-dot" style="background:#28c840;"></div>
+                        <span class="ms-3 text-muted small">PackFlow - 재고 대시보드</span>
+                    </div>
+                    <div class="showcase-body">
+                        <div class="d-flex mb-3">
+                            <div style="width:200px;background:#f1f5f9;border-radius:8px;padding:16px;margin-right:16px;">
+                                <div class="small fw-bold mb-2">사이드바</div>
+                                <div class="small text-primary mb-1">대시보드</div>
+                                <div class="small text-muted mb-1">창고 관리</div>
+                                <div class="small text-muted mb-1">재고 관리</div>
+                                <div class="small text-muted mb-1">주문/출고</div>
+                                <div class="small text-muted">패킹센터</div>
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="row g-2 mb-3">
+                                    <div class="col-4"><div class="bg-white border rounded p-2 text-center"><small class="text-muted d-block">A창고</small><strong class="text-primary">2,340</strong></div></div>
+                                    <div class="col-4"><div class="bg-white border rounded p-2 text-center"><small class="text-muted d-block">B창고</small><strong class="text-success">1,580</strong></div></div>
+                                    <div class="col-4"><div class="bg-white border rounded p-2 text-center"><small class="text-muted d-block">C냉동</small><strong class="text-info">890</strong></div></div>
+                                </div>
+                                <div class="bg-white border rounded p-2">
+                                    <table class="table table-sm table-borderless mb-0 small">
+                                        <thead><tr class="text-muted"><th>SKU</th><th>상품명</th><th>재고</th><th>상태</th></tr></thead>
+                                        <tbody>
+                                            <tr><td>SK-001</td><td>닭가슴살 1kg</td><td>340</td><td><span class="badge bg-success">정상</span></td></tr>
+                                            <tr><td>SK-002</td><td>프로틴바 12입</td><td>12</td><td><span class="badge bg-warning text-dark">부족</span></td></tr>
+                                            <tr><td>SK-003</td><td>현미밥 30입</td><td>580</td><td><span class="badge bg-success">정상</span></td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ Core Features ══════════ -->
+<section class="section" id="features">
+    <div class="container">
+        <div class="text-center mb-5">
+            <span class="section-badge">Features</span>
+            <h2 class="section-title">3PL사가 정말 필요했던 기능만 담았습니다</h2>
+            <p class="section-desc mx-auto">고객 관리, 재고 관리, 클레임 대비 — 현장의 목소리로 만든 4가지 핵심 모듈</p>
+        </div>
+        <div class="row g-4">
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card">
+                    <div class="feature-icon feature-icon-blue"><i class="bi bi-box-seam"></i></div>
+                    <h5>고객사 재산 관리</h5>
+                    <p>고객사별, 창고별, 구역별 실시간 재고 파악. 고객사의 재고를 정확하게 관리합니다.</p>
+                    <span class="feature-tag">재산을 투명하게</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card">
+                    <div class="feature-icon feature-icon-green"><i class="bi bi-upc-scan"></i></div>
+                    <h5>패킹 & 송장 자동화</h5>
+                    <p>바코드 스캔 검수로 오배송 원천 차단. 송장 자동 출력으로 작업 속도 향상.</p>
+                    <span class="feature-tag">신뢰를 지키는 검수</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card">
+                    <div class="feature-icon feature-icon-purple"><i class="bi bi-people"></i></div>
+                    <h5>고객사 전용 포털</h5>
+                    <p>고객사가 직접 재고와 출고를 확인합니다. 전화 문의가 사라지고, 신뢰가 쌓입니다.</p>
+                    <span class="feature-tag">고객 신뢰 관리</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card">
+                    <div class="feature-icon feature-icon-cyan"><i class="bi bi-camera-video"></i></div>
+                    <h5>출고 영상 증빙</h5>
+                    <p>패킹 과정을 자동 녹화하여 억울한 클레임에 영상으로 증명합니다.</p>
+                    <span class="feature-tag">억울함 제로</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ Workflow ══════════ -->
+<section class="section bg-section" id="workflow">
+    <div class="container">
+        <div class="text-center mb-5">
+            <span class="section-badge">How it works</span>
+            <h2 class="section-title">주문부터 출고까지, 6단계로 끝</h2>
+        </div>
+        <div class="row align-items-center justify-content-center">
+            <div class="col-auto">
+                <div class="workflow-step">
+                    <div class="workflow-num">1</div>
+                    <strong>주문 수집</strong><br><small class="text-muted">쇼핑몰 자동 연동</small>
+                </div>
+            </div>
+            <div class="col-auto workflow-arrow"><i class="bi bi-chevron-right"></i></div>
+            <div class="col-auto">
+                <div class="workflow-step">
+                    <div class="workflow-num">2</div>
+                    <strong>재고 확인</strong><br><small class="text-muted">자동 차감</small>
+                </div>
+            </div>
+            <div class="col-auto workflow-arrow"><i class="bi bi-chevron-right"></i></div>
+            <div class="col-auto">
+                <div class="workflow-step">
+                    <div class="workflow-num">3</div>
+                    <strong>패킹</strong><br><small class="text-muted">바코드 검수</small>
+                </div>
+            </div>
+            <div class="col-auto workflow-arrow"><i class="bi bi-chevron-right"></i></div>
+            <div class="col-auto">
+                <div class="workflow-step">
+                    <div class="workflow-num">4</div>
+                    <strong>송장 출력</strong><br><small class="text-muted">택배사 연동</small>
+                </div>
+            </div>
+            <div class="col-auto workflow-arrow"><i class="bi bi-chevron-right"></i></div>
+            <div class="col-auto">
+                <div class="workflow-step">
+                    <div class="workflow-num">5</div>
+                    <strong>출고</strong><br><small class="text-muted">실시간 추적</small>
+                </div>
+            </div>
+            <div class="col-auto workflow-arrow"><i class="bi bi-chevron-right"></i></div>
+            <div class="col-auto">
+                <div class="workflow-step">
+                    <div class="workflow-num">6</div>
+                    <strong>영상 저장</strong><br><small class="text-muted">증빙 보관</small>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ UI Showcase ══════════ -->
+<section class="section">
+    <div class="container">
+        <div class="text-center mb-5">
+            <span class="section-badge">Product</span>
+            <h2 class="section-title">직관적인 인터페이스</h2>
+            <p class="section-desc mx-auto">복잡한 교육 없이 바로 사용할 수 있는 깔끔한 UI</p>
+        </div>
+        <div class="row g-4">
+            <div class="col-md-6">
+                <div class="showcase-mockup">
+                    <div class="showcase-titlebar">
+                        <div class="showcase-dot" style="background:#ff5f57;"></div>
+                        <div class="showcase-dot" style="background:#ffbd2e;"></div>
+                        <div class="showcase-dot" style="background:#28c840;"></div>
+                        <span class="ms-3 text-muted small">패킹센터 화면</span>
+                    </div>
+                    <div class="showcase-body" style="min-height:200px;">
+                        <div class="bg-white border rounded p-3 mb-2">
+                            <div class="d-flex justify-content-between">
+                                <div><strong>주문 #2024-0312</strong><br><small class="text-muted">고객: 헬스푸드(주)</small></div>
+                                <span class="badge bg-warning text-dark align-self-start">패킹 대기</span>
+                            </div>
+                        </div>
+                        <div class="bg-white border rounded p-3 mb-2">
+                            <div class="d-flex justify-content-between">
+                                <div><strong>주문 #2024-0311</strong><br><small class="text-muted">고객: 맛있는밥상</small></div>
+                                <span class="badge bg-primary align-self-start">패킹중</span>
+                            </div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="d-flex justify-content-between">
+                                <div><strong>주문 #2024-0310</strong><br><small class="text-muted">고객: 프레시마트</small></div>
+                                <span class="badge bg-success align-self-start">출고 완료</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="showcase-mockup">
+                    <div class="showcase-titlebar">
+                        <div class="showcase-dot" style="background:#ff5f57;"></div>
+                        <div class="showcase-dot" style="background:#ffbd2e;"></div>
+                        <div class="showcase-dot" style="background:#28c840;"></div>
+                        <span class="ms-3 text-muted small">고객사 포털</span>
+                    </div>
+                    <div class="showcase-body" style="min-height:200px;">
+                        <div class="row g-2 mb-3">
+                            <div class="col-6"><div class="bg-white border rounded p-3 text-center"><small class="text-muted">보관 SKU</small><h4 class="mb-0 text-primary fw-bold">45</h4></div></div>
+                            <div class="col-6"><div class="bg-white border rounded p-3 text-center"><small class="text-muted">이번달 출고</small><h4 class="mb-0 text-success fw-bold">312</h4></div></div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="small fw-bold mb-2">최근 출고</div>
+                            <div class="small"><i class="bi bi-check-circle text-success"></i> SK-001 닭가슴살 x 50 <span class="text-muted float-end">3/14</span></div>
+                            <div class="small"><i class="bi bi-check-circle text-success"></i> SK-003 현미밥 x 100 <span class="text-muted float-end">3/13</span></div>
+                            <div class="small"><i class="bi bi-truck text-primary"></i> SK-002 프로틴바 x 30 <span class="text-muted float-end">배송중</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ Pricing ══════════ -->
+<section class="section bg-section" id="pricing">
+    <div class="container">
+        <div class="text-center mb-5">
+            <span class="section-badge">Pricing</span>
+            <h2 class="section-title">합리적인 요금제</h2>
+            <p class="section-desc mx-auto">사용량에 맞는 요금제를 선택하세요. 14일 무료 체험 포함.</p>
+        </div>
+        <div class="row g-4 justify-content-center">
+            <div class="col-md-6 col-lg-4">
+                <div class="pricing-card">
+                    <div class="pricing-name">Starter</div>
+                    <p class="text-muted small">소규모 물류센터</p>
+                    <div class="pricing-price">49,000<small>/월</small></div>
+                    <ul class="pricing-features">
+                        <li><i class="bi bi-check-lg"></i> 창고 1개</li>
+                        <li><i class="bi bi-check-lg"></i> SKU 500개</li>
+                        <li><i class="bi bi-check-lg"></i> 사용자 5명</li>
+                        <li><i class="bi bi-check-lg"></i> 고객사 포털</li>
+                        <li><i class="bi bi-check-lg"></i> 이메일 지원</li>
+                    </ul>
+                    <a href="/login" class="btn btn-outline-hero w-100" style="padding:12px;">시작하기</a>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="pricing-card popular">
+                    <div class="pricing-popular-badge">인기</div>
+                    <div class="pricing-name">Growth</div>
+                    <p class="text-muted small">성장하는 3PL 사업자</p>
+                    <div class="pricing-price">149,000<small>/월</small></div>
+                    <ul class="pricing-features">
+                        <li><i class="bi bi-check-lg"></i> 창고 5개</li>
+                        <li><i class="bi bi-check-lg"></i> SKU 무제한</li>
+                        <li><i class="bi bi-check-lg"></i> 사용자 20명</li>
+                        <li><i class="bi bi-check-lg"></i> 출고 영상 증빙</li>
+                        <li><i class="bi bi-check-lg"></i> API 연동</li>
+                        <li><i class="bi bi-check-lg"></i> 전담 매니저</li>
+                    </ul>
+                    <a href="/login" class="btn btn-hero w-100" style="padding:12px;">시작하기</a>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="pricing-card">
+                    <div class="pricing-name">Enterprise</div>
+                    <p class="text-muted small">대형 물류 기업</p>
+                    <div class="pricing-price">별도 문의</div>
+                    <ul class="pricing-features">
+                        <li><i class="bi bi-check-lg"></i> 창고 무제한</li>
+                        <li><i class="bi bi-check-lg"></i> 모든 Growth 기능</li>
+                        <li><i class="bi bi-check-lg"></i> 커스텀 개발</li>
+                        <li><i class="bi bi-check-lg"></i> 온프레미스 설치</li>
+                        <li><i class="bi bi-check-lg"></i> SLA 보장</li>
+                        <li><i class="bi bi-check-lg"></i> 24/7 지원</li>
+                    </ul>
+                    <a href="#contact" class="btn btn-outline-hero w-100" style="padding:12px;">문의하기</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ FAQ ══════════ -->
+<section class="section" id="faq">
+    <div class="container">
+        <div class="text-center mb-5">
+            <span class="section-badge">FAQ</span>
+            <h2 class="section-title">자주 묻는 질문</h2>
+        </div>
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <div class="accordion" id="faqAccordion">
+                    <div class="faq-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#faq1">
+                                기존 쇼핑몰 시스템과 연동이 가능한가요?
+                            </button>
+                        </h2>
+                        <div id="faq1" class="accordion-collapse collapse show" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body text-muted">
+                                네, 쿠팡, 네이버 스마트스토어, Cafe24 등 주요 쇼핑몰 플랫폼과 API 연동을 지원합니다. 주문 자동 수집부터 송장 등록까지 연동됩니다.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq2">
+                                출고 영상은 어떻게 저장되나요?
+                            </button>
+                        </h2>
+                        <div id="faq2" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body text-muted">
+                                패킹 작업 시 자동으로 영상을 촬영하여 클라우드에 저장합니다. 주문 번호로 검색하면 해당 출고 영상을 바로 확인할 수 있습니다. 영상은 90일간 보관됩니다.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq3">
+                                API를 통해 외부 시스템과 연동할 수 있나요?
+                            </button>
+                        </h2>
+                        <div id="faq3" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body text-muted">
+                                REST API를 제공합니다. 재고 조회, 주문 등록, 출고 상태 조회 등의 API를 통해 자체 시스템과 연동할 수 있습니다.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq4">
+                                사용자 수 제한이 있나요?
+                            </button>
+                        </h2>
+                        <div id="faq4" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body text-muted">
+                                요금제별로 사용자 수가 다릅니다. Starter 5명, Growth 20명이며, Enterprise는 무제한입니다. 운영사 직원, 고객사, 패킹 작업자 모두 포함입니다.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq5">
+                                냉동/냉장 창고도 관리할 수 있나요?
+                            </button>
+                        </h2>
+                        <div id="faq5" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                            <div class="accordion-body text-muted">
+                                네, 창고별로 온도 구분(냉동/냉장/실온)을 설정할 수 있으며, 구역 단위로 세분화 관리가 가능합니다.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ CTA ══════════ -->
+<section class="cta-section" id="contact">
+    <div class="container">
+        <h2>고객사의 신뢰를 지키는 시작, PackFlow</h2>
+        <p>14일 무료 체험. 카드 등록 없이, 지금 바로 시작하세요.</p>
+        <div class="d-flex gap-3 justify-content-center flex-wrap">
+            <a href="/login" class="btn btn-hero">무료 체험 시작</a>
+            <a href="/login" class="btn btn-outline-hero" style="border-color:rgba(255,255,255,0.5);color:white;background:transparent;">데모 요청</a>
+        </div>
+        <div class="mt-4">
+            <small style="color:#64748b;">
+                문의: contact@packflow.kr | 02-XXXX-XXXX
+            </small>
+        </div>
+    </div>
+</section>
+
+<!-- ══════════ Footer ══════════ -->
+<footer class="footer">
+    <div class="container">
+        <div class="row g-4">
+            <div class="col-lg-4">
+                <h6><i class="bi bi-box-seam-fill"></i> PackFlow</h6>
+                <p class="small">3PL 물류센터 운영을 위한<br>올인원 SaaS 플랫폼</p>
+            </div>
+            <div class="col-6 col-lg-2">
+                <h6>제품</h6>
+                <a href="#features">기능</a>
+                <a href="#pricing">요금제</a>
+                <a href="#workflow">작동방식</a>
+                <a href="#">API 문서</a>
+            </div>
+            <div class="col-6 col-lg-2">
+                <h6>회사</h6>
+                <a href="#">회사 소개</a>
+                <a href="#">블로그</a>
+                <a href="#">채용</a>
+                <a href="#">문의</a>
+            </div>
+            <div class="col-6 col-lg-2">
+                <h6>지원</h6>
+                <a href="#">도움말</a>
+                <a href="#faq">FAQ</a>
+                <a href="#">서비스 상태</a>
+            </div>
+            <div class="col-6 col-lg-2">
+                <h6>법적 고지</h6>
+                <a href="#">이용약관</a>
+                <a href="#">개인정보처리방침</a>
+                <a href="#">서비스수준협약(SLA)</a>
+            </div>
+        </div>
+        <hr style="border-color:#334155;">
+        <div class="d-flex justify-content-between align-items-center flex-wrap">
+            <small>&copy; 2026 PackFlow. All rights reserved.</small>
+            <small>사업자등록번호: XXX-XX-XXXXX</small>
+        </div>
+    </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// Smooth scroll for anchor links
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', function(e) {
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+            e.preventDefault();
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    });
+});
+
+// Navbar background on scroll
+window.addEventListener('scroll', () => {
+    const nav = document.querySelector('.navbar-landing');
+    nav.style.boxShadow = window.scrollY > 10 ? '0 2px 20px rgba(0,0,0,0.08)' : 'none';
+});
+</script>
+</body>
+</html>

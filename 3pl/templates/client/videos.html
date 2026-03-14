@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}출고영상 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>출고영상</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">출고영상 증빙</h4>
+
+<p class="text-muted mb-3" style="font-size:0.85rem;">
+    패킹 완료된 주문의 영상을 확인할 수 있습니다. 클레임 발생 시 증빙 자료로 활용됩니다.
+</p>
+
+<div class="data-card">
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>주문</th><th>패킹 상태</th><th>작업일</th><th>영상</th></tr></thead>
+            <tbody>
+                {% for j in jobs %}
+                <tr>
+                    <td class="fw-semibold">주문 #{{ j.order_id }}</td>
+                    <td><span class="status-badge status-done">완료</span></td>
+                    <td class="text-muted">{{ j.completed_at[:16] if j.completed_at else '-' }}</td>
+                    <td>
+                        {% if j.video_path %}
+                        <a href="{{ j.video_path }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-play-circle"></i> 재생
+                        </a>
+                        {% else %}
+                        <span class="text-muted">영상 없음</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-center text-muted py-4">출고영상이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

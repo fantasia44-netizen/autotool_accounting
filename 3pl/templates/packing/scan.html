@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}바코드스캔 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>바코드스캔</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">바코드 스캔 검수</h4>
+
+<div class="row g-3">
+    <div class="col-lg-5">
+        <div class="data-card">
+            <div class="data-card-header"><h6>바코드 입력</h6></div>
+            <div class="p-3">
+                <div class="mb-3">
+                    <input type="text" id="barcodeInput" class="form-control" placeholder="바코드를 스캔하세요" autofocus>
+                </div>
+                <button class="btn btn-primary w-100" onclick="scanBarcode()">
+                    <i class="bi bi-upc-scan me-1"></i> 검수
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="data-card">
+            <div class="data-card-header"><h6>스캔 결과</h6></div>
+            <div class="p-3" id="scanResult">
+                <div class="text-center text-muted py-4">바코드를 스캔하면 상품 정보가 표시됩니다</div>
+            </div>
+        </div>
+
+        <div class="data-card mt-3">
+            <div class="data-card-header"><h6>스캔 이력</h6></div>
+            <div class="data-card-body">
+                <table class="table table-compact mb-0">
+                    <thead><tr><th>바코드</th><th>상품명</th><th>시간</th></tr></thead>
+                    <tbody id="scanHistory">
+                        <tr><td colspan="3" class="text-center text-muted py-3">스캔 이력 없음</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const input = document.getElementById('barcodeInput');
+input.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') scanBarcode();
+});
+
+function scanBarcode() {
+    const barcode = input.value.trim();
+    if (!barcode) return;
+
+    fetch('{{ url_for("packing.scan") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({barcode: barcode})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok' && data.sku) {
+            const sku = data.sku;
+            document.getElementById('scanResult').innerHTML = `
+                <div class="alert alert-success py-2 mb-2"><i class="bi bi-check-circle me-1"></i> 상품 확인됨</div>
+                <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                    <tr><th style="width:80px;">SKU</th><td>${sku.sku_code}</td></tr>
+                    <tr><th>상품명</th><td class="fw-semibold">${sku.name}</td></tr>
+                    <tr><th>바코드</th><td><code>${sku.barcode}</code></td></tr>
+                    <tr><th>보관</th><td>${sku.storage_temp}</td></tr>
+                </table>`;
+            addToHistory(barcode, sku.name);
+        } else {
+            document.getElementById('scanResult').innerHTML =
+                '<div class="alert alert-danger py-2"><i class="bi bi-x-circle me-1"></i> 미등록 바코드: ' + barcode + '</div>';
+            addToHistory(barcode, '(미등록)');
+        }
+        input.value = '';
+        input.focus();
+    })
+    .catch(() => {
+        document.getElementById('scanResult').innerHTML =
+            '<div class="alert alert-warning py-2">통신 오류</div>';
+    });
+}
+
+function addToHistory(barcode, name) {
+    const tbody = document.getElementById('scanHistory');
+    if (tbody.querySelector('.text-muted')) tbody.innerHTML = '';
+    const now = new Date().toLocaleTimeString('ko-KR');
+    tbody.insertAdjacentHTML('afterbegin',
+        `<tr><td><code>${barcode}</code></td><td>${name}</td><td class="text-muted">${now}</td></tr>`);
+}
+</script>
+{% endblock %}

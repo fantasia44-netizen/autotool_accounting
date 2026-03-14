@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}이력조회 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>이력조회</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">이력조회</h4>
+
+<div class="filter-bar">
+    <form class="d-flex gap-2 w-100 flex-wrap" method="get">
+        <select name="sku_id" class="form-select" style="max-width:200px;">
+            <option value="">전체 상품</option>
+            {% for s in skus %}
+            <option value="{{ s.id }}" {% if filter_sku_id == s.id %}selected{% endif %}>{{ s.sku_code }} — {{ s.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="type" class="form-select" style="max-width:140px;">
+            <option value="">전체 유형</option>
+            {% for t, label in [('inbound','입고'),('outbound','출고'),('adjust','조정'),('transfer_in','이입'),('transfer_out','이출')] %}
+            <option value="{{ t }}" {% if filter_type == t %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <input type="date" name="date_from" class="form-control" value="{{ filter_date_from or '' }}" style="max-width:150px;">
+        <span class="align-self-center">~</span>
+        <input type="date" name="date_to" class="form-control" value="{{ filter_date_to or '' }}" style="max-width:150px;">
+        <button class="btn btn-sm btn-primary">조회</button>
+    </form>
+</div>
+
+<div class="data-card">
+    <div class="data-card-header">
+        <h6>이동 이력</h6>
+        <span class="text-muted" style="font-size:0.8rem;">{{ movements|length }}건</span>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>일시</th><th>유형</th><th>SKU</th><th>로케이션</th><th class="text-end">수량</th><th>LOT</th><th>메모</th></tr>
+            </thead>
+            <tbody>
+                {% for m in movements %}
+                <tr>
+                    <td class="text-muted">{{ m.created_at[:16] if m.created_at else '-' }}</td>
+                    <td>
+                        {% if m.movement_type == 'inbound' %}<span class="status-badge status-done">입고</span>
+                        {% elif m.movement_type == 'outbound' %}<span class="status-badge status-progress">출고</span>
+                        {% elif m.movement_type == 'adjust' %}<span class="status-badge status-wait">조정</span>
+                        {% else %}<span class="status-badge status-neutral">{{ m.movement_type }}</span>{% endif %}
+                    </td>
+                    <td>{{ m.sku_id }}</td>
+                    <td>{{ m.location_id or '-' }}</td>
+                    <td class="text-end fw-semibold {% if m.quantity > 0 %}text-success{% elif m.quantity < 0 %}text-danger{% endif %}">{{ '{:+d}'.format(m.quantity) }}</td>
+                    <td>{{ m.lot_number or '-' }}</td>
+                    <td class="text-muted">{{ m.memo or '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">이동 이력이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

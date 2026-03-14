@@ -1,0 +1,5 @@
+flask==3.1.0
+flask-login==0.6.3
+supabase==2.11.0
+gunicorn==23.0.0
+python-dotenv==1.0.1

@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}주문 #{{ order.id }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{{ url_for('operator.orders') }}" class="text-decoration-none">주문관리</a>
+<span class="mx-1">/</span>
+<span>#{{ order.order_no or order.id }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0">주문 #{{ order.order_no or order.id }}</h4>
+    <div class="d-flex gap-2 align-items-center">
+        <!-- 보류/해제 -->
+        {% if order.get('hold_flag') %}
+        <span class="badge bg-danger me-1"><i class="bi bi-shield-x me-1"></i>보류: {{ order.hold_reason or '사유 없음' }}</span>
+        <form method="post" action="{{ url_for('operator.order_release_hold', order_id=order.id) }}" style="display:inline;">
+            <button class="btn btn-sm btn-outline-success">보류 해제</button>
+        </form>
+        {% else %}
+        <button class="btn btn-sm btn-outline-danger" onclick="document.getElementById('holdForm').classList.toggle('d-none')">
+            <i class="bi bi-shield-x"></i> 보류
+        </button>
+        {% endif %}
+
+        <!-- 상태 변경 -->
+        <form method="post" action="{{ url_for('operator.order_status_update', order_id=order.id) }}" class="d-flex gap-1">
+            <select name="status" class="form-select form-select-sm" style="width:130px;">
+                {% for s, label in [('pending','대기'),('confirmed','확인'),('picking_ready','피킹대기'),('picking','피킹중'),('picked','피킹완료'),('packing','패킹중'),('packed','패킹완료'),('shipped','출고'),('delivered','배달'),('cancelled','취소')] %}
+                <option value="{{ s }}" {% if order.status == s %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-sm btn-primary">변경</button>
+        </form>
+    </div>
+</div>
+
+<!-- 보류 사유 입력 폼 (토글) -->
+<div id="holdForm" class="d-none mb-3">
+    <div class="data-card">
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.order_hold', order_id=order.id) }}" class="d-flex gap-2 align-items-center">
+                <label class="form-label mb-0" style="white-space:nowrap; font-size:0.85rem;">보류 사유:</label>
+                <select name="reason" class="form-select form-select-sm" style="width:200px;">
+                    <option value="CS보류">CS보류</option>
+                    <option value="주소변경 미반영">주소변경 미반영</option>
+                    <option value="화주사 출고중지 요청">화주사 출고중지 요청</option>
+                    <option value="재고확인 필요">재고확인 필요</option>
+                    <option value="결제 미확인">결제 미확인</option>
+                </select>
+                <button class="btn btn-sm btn-danger">보류 처리</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('holdForm').classList.add('d-none')">취소</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <!-- 주문 정보 -->
+    <div class="col-lg-6">
+        <div class="data-card">
+            <div class="data-card-header"><h6>주문 정보</h6></div>
+            <div class="p-3">
+                <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                    <tr><th style="width:100px;">채널</th><td>{{ order.channel or '-' }}</td></tr>
+                    <tr><th>주문번호</th><td>{{ order.order_no or '-' }}</td></tr>
+                    <tr><th>상태</th><td>
+                        {% set status_map = {
+                            'pending': ('status-wait', '대기'),
+                            'confirmed': ('status-progress', '확인'),
+                            'picking_ready': ('status-progress', '피킹대기'),
+                            'picking': ('status-progress', '피킹중'),
+                            'picked': ('status-progress', '피킹완료'),
+                            'packing': ('status-progress', '패킹중'),
+                            'packed': ('status-progress', '패킹완료'),
+                            'shipped': ('status-done', '출고'),
+                            'delivered': ('status-done', '배달완료'),
+                            'cancelled': ('status-error', '취소'),
+                        } %}
+                        {% set badge = status_map.get(order.status, ('status-neutral', order.status)) %}
+                        <span class="status-badge {{ badge[0] }}">{{ badge[1] }}</span>
+                        {% if order.get('hold_flag') %}
+                        <span class="badge bg-danger ms-1">보류</span>
+                        {% endif %}
+                    </td></tr>
+                    <tr><th>주문일</th><td>{{ order.order_date or order.created_at or '-' }}</td></tr>
+                    <tr><th>메모</th><td>{{ order.memo or '-' }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 수령인 정보 -->
+    <div class="col-lg-6">
+        <div class="data-card">
+            <div class="data-card-header"><h6>수령인</h6></div>
+            <div class="p-3">
+                <table class="table table-sm mb-0" style="font-size:0.85rem;">
+                    <tr><th style="width:100px;">이름</th><td>{{ order.recipient_name or '-' }}</td></tr>
+                    <tr><th>연락처</th><td>{{ order.recipient_phone or '-' }}</td></tr>
+                    <tr><th>주소</th><td>{{ order.recipient_address or '-' }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 주문 아이템 -->
+    <div class="col-12">
+        <div class="data-card">
+            <div class="data-card-header"><h6>주문 상세</h6></div>
+            <div class="data-card-body">
+                <table class="table table-compact mb-0">
+                    <thead>
+                        <tr><th>SKU ID</th><th>수량</th><th>단가</th><th>소계</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for item in order.get('items', []) %}
+                        <tr>
+                            <td>{{ item.sku_id }}</td>
+                            <td>{{ item.quantity }}</td>
+                            <td>{{ '{:,.0f}'.format(item.unit_price|default(0)) }}원</td>
+                            <td class="fw-semibold">{{ '{:,.0f}'.format((item.quantity|default(0)) * (item.unit_price|default(0))) }}원</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">아이템 없음</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 배송 -->
+    <div class="col-lg-6">
+        <div class="data-card">
+            <div class="data-card-header"><h6>배송 정보</h6></div>
+            <div class="data-card-body">
+                <table class="table table-compact mb-0">
+                    <thead><tr><th>택배사</th><th>송장번호</th><th>상태</th><th>출고일</th></tr></thead>
+                    <tbody>
+                        {% for s in shipments %}
+                        <tr>
+                            <td>{{ s.courier or '-' }}</td>
+                            <td>{{ s.invoice_no or '-' }}</td>
+                            <td><span class="status-badge status-{% if s.status == 'delivered' %}done{% elif s.status == 'shipped' or s.status == 'in_transit' %}progress{% else %}wait{% endif %}">{{ s.status }}</span></td>
+                            <td>{{ s.shipped_at[:10] if s.shipped_at else '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">배송 기록 없음</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 패킹 -->
+    <div class="col-lg-6">
+        <div class="data-card">
+            <div class="data-card-header"><h6>패킹 작업</h6></div>
+            <div class="data-card-body">
+                <table class="table table-compact mb-0">
+                    <thead><tr><th>작업자</th><th>상태</th><th>시작</th><th>완료</th></tr></thead>
+                    <tbody>
+                        {% for p in packings %}
+                        <tr>
+                            <td>{{ p.user_id or '-' }}</td>
+                            <td><span class="status-badge status-{% if p.status == 'completed' %}done{% elif p.status == 'recording' %}progress{% else %}neutral{% endif %}">{{ p.status }}</span></td>
+                            <td>{{ p.started_at[:16] if p.started_at else '-' }}</td>
+                            <td>{{ p.completed_at[:16] if p.completed_at else '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">패킹 기록 없음</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 상태 변경 이력 -->
+    <div class="col-12">
+        <div class="data-card">
+            <div class="data-card-header"><h6><i class="bi bi-clock-history me-1"></i>상태 변경 이력</h6></div>
+            <div class="data-card-body">
+                <table class="table table-compact mb-0" style="font-size:0.82rem;">
+                    <thead><tr><th>시각</th><th>이전</th><th></th><th>변경</th><th>사유</th><th>변경자</th></tr></thead>
+                    <tbody>
+                        {% for log in status_logs %}
+                        <tr>
+                            <td class="text-muted">{{ log.created_at[:16] if log.created_at else '-' }}</td>
+                            <td>{{ log.old_status or '-' }}</td>
+                            <td class="text-muted">→</td>
+                            <td class="fw-semibold">{{ log.new_status }}</td>
+                            <td class="text-muted">{{ log.reason or '' }}</td>
+                            <td>{{ log.changed_by or '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="text-center text-muted py-3">변경 이력 없음</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

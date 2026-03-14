@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}피킹관리 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>피킹관리</span>{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0">피킹관리</h4>
+    <button class="btn btn-sm btn-primary" onclick="document.getElementById('genForm').classList.toggle('d-none')">
+        <i class="bi bi-plus"></i> 피킹리스트 생성
+    </button>
+</div>
+
+<!-- 상태 필터 -->
+<div class="d-flex gap-2 mb-3">
+    <a href="{{ url_for('operator.picking') }}" class="btn btn-sm {% if not filter_status %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        전체 {{ (counts.get('created',0) + counts.get('in_progress',0) + counts.get('completed',0))|default(0) }}
+    </a>
+    <a href="{{ url_for('operator.picking', status='created') }}" class="btn btn-sm {% if filter_status == 'created' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        생성 {{ counts.get('created', 0) }}
+    </a>
+    <a href="{{ url_for('operator.picking', status='in_progress') }}" class="btn btn-sm {% if filter_status == 'in_progress' %}btn-warning{% else %}btn-outline-secondary{% endif %}">
+        진행중 {{ counts.get('in_progress', 0) }}
+    </a>
+    <a href="{{ url_for('operator.picking', status='completed') }}" class="btn btn-sm {% if filter_status == 'completed' %}btn-success{% else %}btn-outline-secondary{% endif %}">
+        완료 {{ counts.get('completed', 0) }}
+    </a>
+</div>
+
+<!-- 생성 폼 (토글) -->
+<div id="genForm" class="d-none mb-3">
+    <div class="data-card">
+        <div class="data-card-header"><h6>피킹리스트 생성</h6></div>
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.picking_generate') }}">
+                <div class="row g-2 mb-2">
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">리스트 유형</label>
+                        <select name="list_type" class="form-select form-select-sm">
+                            <option value="by_order">주문별 피킹</option>
+                            <option value="by_product">상품별 합산</option>
+                            <option value="by_location">위치 순 정렬</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">창고</label>
+                        <select name="warehouse_id" class="form-select form-select-sm">
+                            <option value="">전체</option>
+                            {% for wh in warehouses %}
+                            <option value="{{ wh.id }}">{{ wh.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">화주사</label>
+                        <select name="client_id" class="form-select form-select-sm">
+                            <option value="">전체</option>
+                            {% for c in clients %}
+                            <option value="{{ c.id }}">{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div style="max-height:300px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; padding:8px;">
+                    <div class="form-check mb-1" style="font-size:0.8rem;">
+                        <input class="form-check-input" type="checkbox" id="selectAll" onchange="document.querySelectorAll('.order-chk').forEach(c=>c.checked=this.checked)">
+                        <label class="form-check-label fw-semibold" for="selectAll">전체 선택</label>
+                    </div>
+                    {% for o in confirmed_orders %}
+                    <div class="form-check mb-1" style="font-size:0.8rem;">
+                        <input class="form-check-input order-chk" type="checkbox" name="order_ids" value="{{ o.id }}" id="o{{ o.id }}">
+                        <label class="form-check-label" for="o{{ o.id }}">
+                            #{{ o.order_no or o.id }}
+                            <span class="text-muted">{{ o.channel or '' }}</span>
+                            <span class="text-muted">{{ o.recipient_name or '' }}</span>
+                        </label>
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-3" style="font-size:0.85rem;">확정(confirmed) 상태의 주문이 없습니다</div>
+                    {% endfor %}
+                </div>
+
+                <div class="mt-2">
+                    <button class="btn btn-primary btn-sm">피킹리스트 생성</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('genForm').classList.add('d-none')">취소</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 피킹리스트 목록 -->
+<div class="data-card">
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    <th>리스트번호</th>
+                    <th>유형</th>
+                    <th>상태</th>
+                    <th>항목</th>
+                    <th>진행</th>
+                    <th>생성일</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pl in lists %}
+                <tr>
+                    <td class="fw-semibold">
+                        <a href="{{ url_for('operator.picking_detail', list_id=pl.id) }}" style="color:inherit; text-decoration:none; border-bottom:1px dashed #cbd5e1;">{{ pl.list_no }}</a>
+                    </td>
+                    <td>
+                        {% if pl.list_type == 'by_order' %}<span class="status-badge status-progress" style="font-size:0.7rem;">주문별</span>
+                        {% elif pl.list_type == 'by_product' %}<span class="status-badge status-done" style="font-size:0.7rem;">상품별</span>
+                        {% elif pl.list_type == 'by_location' %}<span class="status-badge status-wait" style="font-size:0.7rem;">위치별</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if pl.status == 'created' %}<span class="status-badge status-wait">생성</span>
+                        {% elif pl.status == 'in_progress' %}<span class="status-badge status-progress">진행</span>
+                        {% elif pl.status == 'completed' %}<span class="status-badge status-done">완료</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ pl.total_items or 0 }}건</td>
+                    <td>
+                        {% set pct = ((pl.picked_items or 0) / (pl.total_items or 1) * 100)|round|int %}
+                        <div style="width:60px; height:6px; background:#e2e8f0; border-radius:3px; display:inline-block; vertical-align:middle;">
+                            <div style="width:{{ pct }}%; height:100%; background:{% if pct == 100 %}#16a34a{% else %}#2563eb{% endif %}; border-radius:3px;"></div>
+                        </div>
+                        <span style="font-size:0.75rem; margin-left:4px;">{{ pct }}%</span>
+                    </td>
+                    <td class="text-muted" style="font-size:0.8rem;">{{ pl.created_at[:16] if pl.created_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">피킹리스트가 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

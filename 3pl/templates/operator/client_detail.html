@@ -1,0 +1,537 @@
+{% extends "base.html" %}
+{% block title %}{{ client.name }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{{ url_for('operator.clients') }}" style="color:var(--text-secondary); text-decoration:none;">고객사관리</a>
+<span style="margin:0 6px; color:var(--text-secondary);">/</span>
+<span>{{ client.name }}</span>
+{% endblock %}
+
+{% block content %}
+<!-- ═══ 고객사 정보 ═══ -->
+<div class="data-card mb-3">
+    <div class="data-card-header">
+        <h6 class="mb-0"><i class="bi bi-building me-1"></i>고객사 정보</h6>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('operator.client_billing', client_id=client.id) }}" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-calculator me-1"></i>정산
+            </a>
+            <button class="btn btn-sm btn-outline-secondary" onclick="toggleEditForm()">
+                <i class="bi bi-pencil"></i> 수정
+            </button>
+        </div>
+    </div>
+    <div class="data-card-body">
+        <!-- 읽기 모드 -->
+        <div id="clientInfo">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <div class="text-muted" style="font-size:0.75rem;">고객사명</div>
+                    <div class="fw-semibold">{{ client.name }}</div>
+                </div>
+                <div class="col-md-4">
+                    <div class="text-muted" style="font-size:0.75rem;">사업자번호</div>
+                    <div>{{ client.business_no or '-' }}</div>
+                </div>
+                <div class="col-md-4">
+                    <div class="text-muted" style="font-size:0.75rem;">담당자</div>
+                    <div>{{ client.contact_name or '-' }}</div>
+                </div>
+                <div class="col-md-4">
+                    <div class="text-muted" style="font-size:0.75rem;">연락처</div>
+                    <div>{{ client.contact_phone or '-' }}</div>
+                </div>
+                <div class="col-md-4">
+                    <div class="text-muted" style="font-size:0.75rem;">이메일</div>
+                    <div>{{ client.contact_email or '-' }}</div>
+                </div>
+                <div class="col-md-4">
+                    <div class="text-muted" style="font-size:0.75rem;">상태</div>
+                    <div>
+                        {% if client.is_active %}<span class="status-badge status-done">활성</span>
+                        {% else %}<span class="status-badge status-error">비활성</span>{% endif %}
+                    </div>
+                </div>
+                {% if client.address %}
+                <div class="col-12">
+                    <div class="text-muted" style="font-size:0.75rem;">주소</div>
+                    <div>{{ client.address }}</div>
+                </div>
+                {% endif %}
+                {% if client.memo %}
+                <div class="col-12">
+                    <div class="text-muted" style="font-size:0.75rem;">메모</div>
+                    <div>{{ client.memo }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 수정 폼 (토글) -->
+        <div id="clientEditForm" class="d-none">
+            <form method="post" action="{{ url_for('operator.client_update', client_id=client.id) }}">
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">고객사명 *</label>
+                        <input type="text" name="name" class="form-control form-control-sm" value="{{ client.name }}" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">사업자번호</label>
+                        <input type="text" name="business_no" class="form-control form-control-sm" value="{{ client.business_no or '' }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">담당자</label>
+                        <input type="text" name="contact_name" class="form-control form-control-sm" value="{{ client.contact_name or '' }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">연락처</label>
+                        <input type="tel" name="contact_phone" class="form-control form-control-sm" value="{{ client.contact_phone or '' }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">이메일</label>
+                        <input type="email" name="contact_email" class="form-control form-control-sm" value="{{ client.contact_email or '' }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">주소</label>
+                        <input type="text" name="address" class="form-control form-control-sm" value="{{ client.address or '' }}">
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label" style="font-size:0.75rem;">메모</label>
+                        <input type="text" name="memo" class="form-control form-control-sm" value="{{ client.memo or '' }}">
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">저장</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleEditForm()">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ 요금표 ═══ -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6 class="mb-0">
+            <i class="bi bi-receipt me-1"></i>요금표
+            <span class="text-muted" style="font-size:0.8rem; font-weight:400; margin-left:8px;">{{ rate_count }}/50</span>
+        </h6>
+        {% if rate_count < 50 %}
+        <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-primary" onclick="togglePresetForm()">
+                <i class="bi bi-lightning me-1"></i>프리셋 추가
+            </button>
+            <button class="btn btn-sm btn-primary" onclick="toggleRateForm()">
+                <i class="bi bi-plus"></i> 항목 추가
+            </button>
+        </div>
+        {% else %}
+        <span class="text-muted" style="font-size:0.8rem;">최대 50개</span>
+        {% endif %}
+    </div>
+    <div class="data-card-body">
+        <!-- 프리셋 폼 -->
+        <div id="presetForm" class="d-none mb-3" style="background:#eef2ff; border-radius:8px; padding:12px;">
+            <form method="post" action="{{ url_for('operator.client_rate_preset', client_id=client.id) }}">
+                <div class="mb-2" style="font-size:0.82rem; font-weight:600;">기본 과금 항목 프리셋</div>
+                <div class="row g-2">
+                    {% for cat, label in [('inbound','입고비'),('outbound','출고비'),('storage','보관비'),('courier','택배비'),('material','부자재비'),('return','반품비'),('vas','부가서비스')] %}
+                    <div class="col-auto">
+                        <label class="form-check-label" style="font-size:0.8rem;">
+                            <input type="checkbox" name="categories" value="{{ cat }}" class="form-check-input"> {{ label }}
+                        </label>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="d-flex gap-2 mt-2">
+                    <button type="submit" class="btn btn-primary btn-sm">선택 항목 추가</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="togglePresetForm()">취소</button>
+                </div>
+                <div class="text-muted mt-1" style="font-size:0.72rem;">금액은 0원으로 추가됩니다. 추가 후 개별 수정하세요.</div>
+            </form>
+        </div>
+
+        <!-- 추가 폼 (토글) -->
+        <div id="rateAddForm" class="d-none mb-3" style="background:#f8fafc; border-radius:8px; padding:12px;">
+            <form method="post" action="{{ url_for('operator.client_rate_create', client_id=client.id) }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">카테고리</label>
+                        <select name="category" class="form-select form-select-sm">
+                            {% for val, label in [('inbound','입고비'),('outbound','출고비'),('storage','보관비'),('courier','택배비'),('material','부자재비'),('return','반품비'),('vas','부가서비스'),('custom','기타')] %}
+                            <option value="{{ val }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">항목명 *</label>
+                        <input type="text" name="fee_name" class="form-control form-control-sm" placeholder="운송비, 패킹비 등" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">유형</label>
+                        <select name="fee_type" class="form-select form-select-sm">
+                            <option value="fixed">고정 금액</option>
+                            <option value="rate">비율 (%)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">금액/비율</label>
+                        <input type="number" name="amount" class="form-control form-control-sm" step="0.01" value="0" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">단위</label>
+                        <select name="unit_label" class="form-select form-select-sm">
+                            {% for u in ['건','SKU','일','kg','박스','팔레트','개','CBM'] %}
+                            <option value="{{ u }}">{{ u }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">메모</label>
+                        <input type="text" name="memo" class="form-control form-control-sm" placeholder="비고">
+                    </div>
+                    <div class="col-12 d-flex gap-2 mt-2">
+                        <button type="submit" class="btn btn-primary btn-sm">추가</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleRateForm()">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- 요금 목록 -->
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    <th style="width:40px;">#</th>
+                    <th>항목명</th>
+                    <th>유형</th>
+                    <th style="text-align:right;">금액/비율</th>
+                    <th>단위</th>
+                    <th>메모</th>
+                    <th style="width:100px; text-align:center;">관리</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rate in rates %}
+                <tr id="rateRow{{ rate.id }}">
+                    <td class="text-muted">{{ loop.index }}</td>
+                    <td class="fw-semibold">{{ rate.fee_name }}</td>
+                    <td>
+                        {% if rate.fee_type == 'fixed' %}
+                        <span class="status-badge status-done" style="font-size:0.7rem;">고정</span>
+                        {% else %}
+                        <span class="status-badge status-progress" style="font-size:0.7rem;">비율</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align:right; font-weight:600; font-family:'Courier New',monospace;">
+                        {% if rate.fee_type == 'rate' %}
+                            {{ rate.amount }}%
+                        {% else %}
+                            {{ "{:,.0f}".format(rate.amount|float) }}원
+                        {% endif %}
+                    </td>
+                    <td class="text-muted">{{ rate.unit_label or '-' }}</td>
+                    <td class="text-muted" style="font-size:0.8rem;">{{ rate.memo or '' }}</td>
+                    <td style="text-align:center;">
+                        <button class="btn btn-sm btn-link p-0 me-1" onclick="showEditRate({{ rate.id }})" title="수정">
+                            <i class="bi bi-pencil" style="font-size:0.85rem;"></i>
+                        </button>
+                        <form method="post" action="{{ url_for('operator.client_rate_delete', client_id=client.id, rate_id=rate.id) }}" style="display:inline;" onsubmit="return confirm('이 항목을 삭제하시겠습니까?')">
+                            <button type="submit" class="btn btn-sm btn-link p-0 text-danger" title="삭제">
+                                <i class="bi bi-trash" style="font-size:0.85rem;"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                <!-- 인라인 수정 폼 (숨김) -->
+                <tr id="rateEdit{{ rate.id }}" class="d-none" style="background:#f8fafc;">
+                    <td colspan="7">
+                        <form method="post" action="{{ url_for('operator.client_rate_update', client_id=client.id, rate_id=rate.id) }}">
+                            <div class="row g-2 align-items-end">
+                                <div class="col-md-3">
+                                    <input type="text" name="fee_name" class="form-control form-control-sm" value="{{ rate.fee_name }}" required>
+                                </div>
+                                <div class="col-md-2">
+                                    <select name="fee_type" class="form-select form-select-sm">
+                                        <option value="fixed" {{ 'selected' if rate.fee_type == 'fixed' }}>고정 금액</option>
+                                        <option value="rate" {{ 'selected' if rate.fee_type == 'rate' }}>비율 (%)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <input type="number" name="amount" class="form-control form-control-sm" step="0.01" value="{{ rate.amount }}">
+                                </div>
+                                <div class="col-md-2">
+                                    <select name="unit_label" class="form-select form-select-sm">
+                                        {% for u in ['건','SKU','일','kg','박스','팔레트'] %}
+                                        <option value="{{ u }}" {{ 'selected' if rate.unit_label == u }}>{{ u }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <input type="text" name="memo" class="form-control form-control-sm" value="{{ rate.memo or '' }}">
+                                </div>
+                                <div class="col-12 d-flex gap-2 mt-1">
+                                    <button type="submit" class="btn btn-primary btn-sm">저장</button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="hideEditRate({{ rate.id }})">취소</button>
+                                </div>
+                            </div>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">등록된 요금 항목이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ═══ 마켓플레이스 API 연동 ═══ -->
+<div class="data-card mt-3">
+    <div class="data-card-header">
+        <h6 class="mb-0">
+            <i class="bi bi-plug me-1"></i>마켓플레이스 API
+            <span class="text-muted" style="font-size:0.8rem; font-weight:400; margin-left:8px;">{{ mkt_creds|length }}개 연동</span>
+        </h6>
+        <button class="btn btn-sm btn-primary" onclick="toggleMktForm()">
+            <i class="bi bi-plus"></i> API 추가
+        </button>
+    </div>
+    <div class="data-card-body">
+        <!-- 추가 폼 -->
+        <div id="mktAddForm" class="d-none mb-3" style="background:#f8fafc; border-radius:8px; padding:12px;">
+            <form method="post" action="{{ url_for('operator.client_marketplace_create', client_id=client.id) }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">채널 *</label>
+                        <select name="channel" class="form-select form-select-sm" required onchange="toggleExtraFields(this)">
+                            <option value="">선택</option>
+                            <option value="naver">네이버 스마트스토어</option>
+                            <option value="coupang">쿠팡</option>
+                            <option value="cafe24">카페24</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">API Client ID *</label>
+                        <input type="text" name="api_client_id" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">API Client Secret *</label>
+                        <input type="password" name="api_client_secret" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-md-2 extra-field-vendor d-none">
+                        <label class="form-label" style="font-size:0.75rem;">Vendor ID</label>
+                        <input type="text" name="vendor_id" class="form-control form-control-sm" placeholder="쿠팡 벤더 ID">
+                    </div>
+                    <div class="col-md-2 extra-field-mall d-none">
+                        <label class="form-label" style="font-size:0.75rem;">Mall ID</label>
+                        <input type="text" name="mall_id" class="form-control form-control-sm" placeholder="카페24 몰 ID">
+                    </div>
+                    <div class="col-12 d-flex gap-2 mt-2">
+                        <button type="submit" class="btn btn-primary btn-sm">등록</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleMktForm()">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- 연동 목록 -->
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    <th>채널</th>
+                    <th>API Client ID</th>
+                    <th>상태</th>
+                    <th style="width:100px; text-align:center;">관리</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cred in mkt_creds %}
+                {% set channel_names = {'naver': '네이버', 'coupang': '쿠팡', 'cafe24': '카페24'} %}
+                {% set channel_colors = {'naver': '#03c75a', 'coupang': '#e44232', 'cafe24': '#2db400'} %}
+                <tr>
+                    <td>
+                        <span class="fw-semibold" style="color:{{ channel_colors.get(cred.channel, '#666') }};">
+                            {{ channel_names.get(cred.channel, cred.channel) }}
+                        </span>
+                    </td>
+                    <td><code style="font-size:0.8rem;">{{ cred.api_client_id[:20] }}{{ '...' if cred.api_client_id|length > 20 else '' }}</code></td>
+                    <td>
+                        {% if cred.is_active %}
+                        <span class="status-badge status-done">활성</span>
+                        {% else %}
+                        <span class="status-badge status-error">비활성</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        <form method="post" action="{{ url_for('operator.client_marketplace_delete', client_id=client.id, cred_id=cred.id) }}"
+                              style="display:inline;" onsubmit="return confirm('이 API 연동을 삭제하시겠습니까?')">
+                            <button class="btn btn-sm btn-outline-danger" title="삭제"><i class="bi bi-trash"></i></button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-center text-muted py-4">등록된 API 연동이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ═══ 상품 (SKU) ═══ -->
+<div class="data-card mt-3">
+    <div class="data-card-header">
+        <h6 class="mb-0">
+            <i class="bi bi-upc-scan me-1"></i>상품 (SKU)
+            <span class="text-muted" style="font-size:0.8rem; font-weight:400; margin-left:8px;">{{ client_skus|length }}개</span>
+        </h6>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('operator.sku_sample_excel') }}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-download me-1"></i>샘플
+            </a>
+            <button class="btn btn-sm btn-outline-primary" onclick="toggleSkuExcelForm()">
+                <i class="bi bi-upload me-1"></i>엑셀 업로드
+            </button>
+            <button class="btn btn-sm btn-primary" onclick="toggleSkuForm()">
+                <i class="bi bi-plus"></i> 상품 추가
+            </button>
+        </div>
+    </div>
+    <div class="data-card-body">
+        <!-- 엑셀 업로드 폼 -->
+        <div id="skuExcelForm" class="d-none mb-3" style="background:#f8fafc; border-radius:8px; padding:12px;">
+            <form method="post" action="{{ url_for('operator.sku_bulk_upload') }}" enctype="multipart/form-data">
+                <input type="hidden" name="client_id" value="{{ client.id }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-5">
+                        <label class="form-label" style="font-size:0.75rem;">엑셀 파일 (.xlsx)</label>
+                        <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx,.xls" required>
+                    </div>
+                    <div class="col-md-2">
+                        <button type="submit" class="btn btn-primary btn-sm">업로드</button>
+                    </div>
+                </div>
+                <div class="text-muted mt-1" style="font-size:0.75rem;">sku_code, barcode, name, category, unit, storage_temp, weight_g, memo</div>
+            </form>
+        </div>
+        <!-- 추가 폼 -->
+        <div id="skuAddForm" class="d-none mb-3" style="background:#f8fafc; border-radius:8px; padding:12px;">
+            <form method="post" action="{{ url_for('operator.client_sku_create', client_id=client.id) }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">SKU코드 *</label>
+                        <input type="text" name="sku_code" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">바코드 *</label>
+                        <input type="text" name="barcode" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">상품명 *</label>
+                        <input type="text" name="name" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">단위</label>
+                        <select name="unit" class="form-select form-select-sm">
+                            {% for val, label in [('EA','EA(개)'),('BOX','BOX(박스)'),('PALLET','PALLET(팔레트)'),('PACK','PACK(팩)'),('SET','SET(세트)')] %}
+                            <option value="{{ val }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">보관온도</label>
+                        <select name="storage_temp" class="form-select form-select-sm">
+                            <option value="ambient">상온</option>
+                            <option value="cold">냉장</option>
+                            <option value="frozen">냉동</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">카테고리</label>
+                        <input type="text" name="category" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">중량(g)</label>
+                        <input type="number" name="weight_g" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">메모</label>
+                        <input type="text" name="memo" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-12 d-flex gap-2 mt-2">
+                        <button type="submit" class="btn btn-primary btn-sm">등록</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSkuForm()">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- SKU 목록 -->
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>SKU코드</th><th>바코드</th><th>상품명</th><th>단위</th><th>보관</th><th>카테고리</th><th>중량</th></tr>
+            </thead>
+            <tbody>
+                {% for s in client_skus %}
+                <tr>
+                    <td><code>{{ s.sku_code }}</code></td>
+                    <td class="fw-semibold">{{ s.barcode or '-' }}</td>
+                    <td>{{ s.name }}</td>
+                    <td>{{ s.unit or 'EA' }}</td>
+                    <td>
+                        {% if s.storage_temp == 'cold' %}<span class="status-badge status-progress">냉장</span>
+                        {% elif s.storage_temp == 'frozen' %}<span class="status-badge" style="background:#e0e7ff;color:#4338ca;">냉동</span>
+                        {% else %}<span class="status-badge status-neutral">상온</span>{% endif %}
+                    </td>
+                    <td>{{ s.category or '-' }}</td>
+                    <td>{{ s.weight_g or '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">등록된 상품이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function toggleEditForm() {
+    document.getElementById('clientInfo').classList.toggle('d-none');
+    document.getElementById('clientEditForm').classList.toggle('d-none');
+}
+
+function toggleRateForm() {
+    document.getElementById('rateAddForm').classList.toggle('d-none');
+}
+
+function togglePresetForm() {
+    document.getElementById('presetForm').classList.toggle('d-none');
+}
+
+function showEditRate(id) {
+    document.getElementById('rateRow' + id).classList.add('d-none');
+    document.getElementById('rateEdit' + id).classList.remove('d-none');
+}
+
+function hideEditRate(id) {
+    document.getElementById('rateRow' + id).classList.remove('d-none');
+    document.getElementById('rateEdit' + id).classList.add('d-none');
+}
+
+function toggleMktForm() {
+    document.getElementById('mktAddForm').classList.toggle('d-none');
+}
+
+function toggleSkuForm() {
+    document.getElementById('skuAddForm').classList.toggle('d-none');
+}
+
+function toggleSkuExcelForm() {
+    document.getElementById('skuExcelForm').classList.toggle('d-none');
+}
+
+function toggleExtraFields(sel) {
+    document.querySelectorAll('.extra-field-vendor').forEach(el => el.classList.toggle('d-none', sel.value !== 'coupang'));
+    document.querySelectorAll('.extra-field-mall').forEach(el => el.classList.toggle('d-none', sel.value !== 'cafe24'));
+}
+</script>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}실적조회 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>실적조회</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">패킹 실적</h4>
+
+<div class="row g-3 mb-4">
+    <div class="col-sm-6">
+        <div class="stat-card">
+            <div class="stat-label">내 완료 건수</div>
+            <div class="stat-value">{{ my_jobs|length }}</div>
+        </div>
+    </div>
+    <div class="col-sm-6">
+        <div class="stat-card">
+            <div class="stat-label">전체 완료 건수</div>
+            <div class="stat-value">{{ all_jobs|length }}</div>
+        </div>
+    </div>
+</div>
+
+<div class="data-card">
+    <div class="data-card-header"><h6>내 작업 이력</h6></div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>주문</th><th>바코드</th><th>시작</th><th>완료</th></tr></thead>
+            <tbody>
+                {% for j in my_jobs %}
+                <tr>
+                    <td class="fw-semibold">주문 #{{ j.order_id }}</td>
+                    <td><code>{{ j.scanned_barcode or '-' }}</code></td>
+                    <td class="text-muted">{{ j.started_at[:16] if j.started_at else '-' }}</td>
+                    <td class="text-muted">{{ j.completed_at[:16] if j.completed_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-center text-muted py-4">작업 이력이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

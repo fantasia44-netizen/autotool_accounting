@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}고객사관리 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>고객사관리</span>{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0">고객사관리</h4>
+    <button class="btn btn-sm btn-primary" onclick="document.getElementById('newClientForm').classList.toggle('d-none')">
+        <i class="bi bi-plus"></i> 고객사 등록
+    </button>
+</div>
+
+<!-- 등록 폼 (토글) -->
+<div id="newClientForm" class="d-none mb-3">
+    <div class="data-card">
+        <div class="data-card-header"><h6>새 고객사</h6></div>
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.client_create') }}">
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <input type="text" name="name" class="form-control form-control-sm" placeholder="고객사명 *" required>
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" name="business_no" class="form-control form-control-sm" placeholder="사업자번호">
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" name="contact_name" class="form-control form-control-sm" placeholder="담당자명">
+                    </div>
+                    <div class="col-md-4">
+                        <input type="tel" name="contact_phone" class="form-control form-control-sm" placeholder="연락처">
+                    </div>
+                    <div class="col-md-4">
+                        <input type="email" name="contact_email" class="form-control form-control-sm" placeholder="이메일">
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" name="address" class="form-control form-control-sm" placeholder="주소">
+                    </div>
+                    <div class="col-md-8">
+                        <input type="text" name="memo" class="form-control form-control-sm" placeholder="메모">
+                    </div>
+                    <div class="col-md-4">
+                        <button class="btn btn-primary btn-sm w-100">등록</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 목록 -->
+<div class="data-card">
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>고객사명</th><th>사업자번호</th><th>담당자</th><th>연락처</th><th>상태</th></tr>
+            </thead>
+            <tbody>
+                {% for c in clients %}
+                <tr>
+                    <td class="fw-semibold"><a href="{{ url_for('operator.client_detail', client_id=c.id) }}" style="color:inherit; text-decoration:none; border-bottom:1px dashed #cbd5e1;">{{ c.name }}</a></td>
+                    <td>{{ c.business_no or '-' }}</td>
+                    <td>{{ c.contact_name or '-' }}</td>
+                    <td>{{ c.contact_phone or '-' }}</td>
+                    <td><span class="status-badge {% if c.is_active %}status-done{% else %}status-error{% endif %}">{{ '활성' if c.is_active else '비활성' }}</span></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-muted py-4">등록된 고객사가 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

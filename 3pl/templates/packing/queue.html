@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}작업큐 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>작업큐</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">패킹 작업큐</h4>
+
+<div class="data-card">
+    <div class="data-card-header">
+        <h6>대기중 작업</h6>
+        <span class="text-muted" style="font-size:0.8rem;">{{ jobs|length }}건</span>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>ID</th><th>주문</th><th>작업자</th><th>바코드</th><th>시작시간</th><th>상태</th></tr></thead>
+            <tbody>
+                {% for j in jobs %}
+                <tr>
+                    <td>{{ j.id }}</td>
+                    <td class="fw-semibold">주문 #{{ j.order_id }}</td>
+                    <td>{{ j.user_id or '미배정' }}</td>
+                    <td><code>{{ j.scanned_barcode or '-' }}</code></td>
+                    <td class="text-muted">{{ j.started_at[:16] if j.started_at else '-' }}</td>
+                    <td><span class="status-badge status-progress">진행중</span></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">대기중인 작업이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

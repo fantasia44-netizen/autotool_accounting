@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}대시보드 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>운영 대시보드</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">대시보드</h4>
+
+<!-- KPI Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-lg-3">
+        <div class="stat-card">
+            <div class="stat-label">오늘 주문</div>
+            <div class="stat-value">{{ (order_counts.get('pending', 0) + order_counts.get('confirmed', 0) + order_counts.get('packing', 0))|default(0) }}</div>
+            <div class="stat-sub">대기 {{ order_counts.get('pending', 0) }} · 확인 {{ order_counts.get('confirmed', 0) }} · 패킹 {{ order_counts.get('packing', 0) }}</div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="stat-card">
+            <div class="stat-label">출고 완료</div>
+            <div class="stat-value">{{ order_counts.get('shipped', 0)|default(0) }}</div>
+            <div class="stat-sub">배달완료 {{ order_counts.get('delivered', 0) }}</div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="stat-card">
+            <div class="stat-label">등록 SKU</div>
+            <div class="stat-value">{{ total_skus }}</div>
+            <div class="stat-sub">부족재고 <span class="{% if low_stock_count > 0 %}text-danger fw-bold{% endif %}">{{ low_stock_count }}</span>건</div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="stat-card">
+            <div class="stat-label">고객사</div>
+            <div class="stat-value">{{ client_count }}</div>
+            <div class="stat-sub">활성 고객</div>
+        </div>
+    </div>
+</div>
+
+<!-- 최근 주문 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6>최근 주문</h6>
+        <a href="{{ url_for('operator.orders') }}" class="btn btn-sm btn-outline-primary">전체 보기</a>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>주문번호</th><th>채널</th><th>수령인</th><th>상태</th><th>일시</th></tr>
+            </thead>
+            <tbody>
+                {% for o in recent_orders %}
+                <tr style="cursor:pointer" onclick="location.href='{{ url_for('operator.order_detail', order_id=o.id) }}'">
+                    <td class="fw-semibold">{{ o.order_no or o.id }}</td>
+                    <td>{{ o.channel or '-' }}</td>
+                    <td>{{ o.recipient_name or '-' }}</td>
+                    <td>
+                        {% if o.status == 'pending' %}<span class="status-badge status-wait">대기</span>
+                        {% elif o.status in ('confirmed','packing') %}<span class="status-badge status-progress">{{ '확인' if o.status == 'confirmed' else '패킹' }}</span>
+                        {% elif o.status in ('shipped','delivered') %}<span class="status-badge status-done">{{ '출고' if o.status == 'shipped' else '배달' }}</span>
+                        {% elif o.status == 'cancelled' %}<span class="status-badge status-error">취소</span>
+                        {% else %}<span class="status-badge status-neutral">{{ o.status }}</span>{% endif %}
+                    </td>
+                    <td class="text-muted">{{ o.created_at[:16] if o.created_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-muted py-4">주문이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

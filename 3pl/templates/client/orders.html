@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}주문현황 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>주문현황</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">주문현황</h4>
+
+<div class="d-flex gap-2 mb-3">
+    <a href="{{ url_for('client.orders') }}" class="btn btn-sm {% if not filter_status %}btn-primary{% else %}btn-outline-secondary{% endif %}">전체</a>
+    {% for s, label in [('pending','대기'),('confirmed','확인'),('packing','패킹'),('shipped','출고'),('delivered','배달')] %}
+    <a href="{{ url_for('client.orders', status=s) }}" class="btn btn-sm {% if filter_status == s %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        {{ label }} {{ counts.get(s, 0) }}
+    </a>
+    {% endfor %}
+</div>
+
+<div class="data-card">
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>주문번호</th><th>채널</th><th>수령인</th><th>연락처</th><th>상태</th><th>주문일</th></tr></thead>
+            <tbody>
+                {% for o in orders %}
+                <tr>
+                    <td class="fw-semibold">{{ o.order_no or o.id }}</td>
+                    <td>{{ o.channel or '-' }}</td>
+                    <td>{{ o.recipient_name or '-' }}</td>
+                    <td>{{ o.recipient_phone or '-' }}</td>
+                    <td>
+                        {% if o.status == 'pending' %}<span class="status-badge status-wait">대기</span>
+                        {% elif o.status in ('confirmed','packing') %}<span class="status-badge status-progress">{{ '확인' if o.status == 'confirmed' else '패킹' }}</span>
+                        {% elif o.status in ('shipped','delivered') %}<span class="status-badge status-done">{{ '출고' if o.status == 'shipped' else '배달' }}</span>
+                        {% elif o.status == 'cancelled' %}<span class="status-badge status-error">취소</span>
+                        {% else %}<span class="status-badge status-neutral">{{ o.status }}</span>{% endif %}
+                    </td>
+                    <td class="text-muted">{{ o.created_at[:10] if o.created_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">주문이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

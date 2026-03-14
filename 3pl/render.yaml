@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: packflow-3pl
+    runtime: docker
+    rootDir: 3pl
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: TEST_MODE
+        value: ""
+      - key: APP_MODE
+        value: 3pl

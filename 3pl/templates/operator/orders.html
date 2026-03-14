@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}주문관리 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>주문관리</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">주문관리</h4>
+
+<!-- 상태 탭 -->
+<div class="d-flex gap-2 mb-3 flex-wrap">
+    <a href="{{ url_for('operator.orders', client_id=filter_client_id or '') }}" class="btn btn-sm {% if not filter_status %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        전체 {{ (counts.values()|list|sum) if counts else 0 }}
+    </a>
+    {% for s, label in [('pending','대기'),('confirmed','확인'),('packing','패킹'),('shipped','출고'),('delivered','배달'),('cancelled','취소')] %}
+    <a href="{{ url_for('operator.orders', status=s, client_id=filter_client_id or '') }}" class="btn btn-sm {% if filter_status == s %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        {{ label }} {{ counts.get(s, 0) }}
+    </a>
+    {% endfor %}
+</div>
+
+<!-- 필터 -->
+<div class="filter-bar">
+    <form class="d-flex gap-2 w-100" method="get">
+        <input type="text" name="search" class="form-control" placeholder="주문번호 검색" value="{{ filter_search or '' }}" style="max-width:200px;">
+        <select name="client_id" class="form-select" style="max-width:180px;">
+            <option value="">전체 고객사</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="channel" class="form-select" style="max-width:150px;">
+            <option value="">전체 채널</option>
+            {% for ch in ['direct','coupang','naver','cafe24'] %}
+            <option value="{{ ch }}" {% if filter_channel == ch %}selected{% endif %}>{{ ch }}</option>
+            {% endfor %}
+        </select>
+        {% if filter_status %}<input type="hidden" name="status" value="{{ filter_status }}">{% endif %}
+        <button class="btn btn-sm btn-primary">검색</button>
+    </form>
+</div>
+
+<!-- 테이블 -->
+<div class="data-card">
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>주문번호</th><th>고객사</th><th>채널</th><th>수령인</th><th>연락처</th><th>상태</th><th>주문일</th></tr>
+            </thead>
+            <tbody>
+                {% for o in orders %}
+                <tr style="cursor:pointer" onclick="location.href='{{ url_for('operator.order_detail', order_id=o.id) }}'">
+                    <td class="col-sticky fw-semibold">{{ o.order_no or o.id }}</td>
+                    <td>{{ client_map.get(o.client_id, '-') }}</td>
+                    <td>{{ o.channel or '-' }}</td>
+                    <td>{{ o.recipient_name or '-' }}</td>
+                    <td>{{ o.recipient_phone or '-' }}</td>
+                    <td>
+                        {% if o.status == 'pending' %}<span class="status-badge status-wait">대기</span>
+                        {% elif o.status in ('confirmed','packing') %}<span class="status-badge status-progress">{{ '확인' if o.status == 'confirmed' else '패킹' }}</span>
+                        {% elif o.status in ('shipped','delivered') %}<span class="status-badge status-done">{{ '출고' if o.status == 'shipped' else '배달' }}</span>
+                        {% elif o.status == 'cancelled' %}<span class="status-badge status-error">취소</span>
+                        {% else %}<span class="status-badge status-neutral">{{ o.status }}</span>{% endif %}
+                    </td>
+                    <td class="text-muted">{{ o.created_at[:10] if o.created_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">주문이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

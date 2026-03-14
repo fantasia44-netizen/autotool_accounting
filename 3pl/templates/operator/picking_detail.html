@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}피킹 {{ pl.list_no }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{{ url_for('operator.picking') }}" style="color:var(--text-secondary); text-decoration:none;">피킹관리</a>
+<span style="margin:0 6px; color:var(--text-secondary);">/</span>
+<span>{{ pl.list_no }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0">{{ pl.list_no }}</h4>
+    <div class="d-flex gap-2 align-items-center">
+        {% if pl.status == 'created' %}
+        <span class="status-badge status-wait">생성</span>
+        {% elif pl.status == 'in_progress' %}
+        <span class="status-badge status-progress">진행중</span>
+        {% elif pl.status == 'completed' %}
+        <span class="status-badge status-done">완료</span>
+        {% endif %}
+
+        {% if pl.status != 'completed' %}
+        <form method="post" action="{{ url_for('operator.picking_complete', list_id=pl.id) }}" onsubmit="return confirm('피킹리스트를 완료 처리하시겠습니까?')">
+            <button class="btn btn-sm btn-success"><i class="bi bi-check-lg"></i> 완료 처리</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 요약 -->
+<div class="row g-3 mb-3">
+    <div class="col-md-3">
+        <div class="data-card p-3 text-center">
+            <div class="text-muted" style="font-size:0.7rem;">유형</div>
+            <div class="fw-semibold">
+                {% if pl.list_type == 'by_order' %}주문별{% elif pl.list_type == 'by_product' %}상품별{% else %}위치별{% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="data-card p-3 text-center">
+            <div class="text-muted" style="font-size:0.7rem;">전체 항목</div>
+            <div class="fw-semibold" style="font-size:1.3rem;">{{ pl.total_items or 0 }}</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="data-card p-3 text-center">
+            <div class="text-muted" style="font-size:0.7rem;">피킹 완료</div>
+            <div class="fw-semibold" style="font-size:1.3rem; color:#16a34a;">{{ pl.picked_items or 0 }}</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="data-card p-3 text-center">
+            <div class="text-muted" style="font-size:0.7rem;">진행률</div>
+            {% set pct = ((pl.picked_items or 0) / (pl.total_items or 1) * 100)|round|int %}
+            <div class="fw-semibold" style="font-size:1.3rem;">{{ pct }}%</div>
+        </div>
+    </div>
+</div>
+
+<!-- 피킹 항목 -->
+<div class="data-card">
+    <div class="data-card-header"><h6><i class="bi bi-list-task me-1"></i>피킹 항목</h6></div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    <th style="width:40px;">#</th>
+                    <th>로케이션</th>
+                    <th>상품</th>
+                    <th>LOT</th>
+                    <th style="text-align:right;">필요</th>
+                    <th style="text-align:right;">피킹</th>
+                    <th>상태</th>
+                    {% if pl.list_type == 'by_order' %}<th>주문</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in pl.get('items', []) %}
+                <tr style="{% if item.status == 'picked' %}background:#f0fdf4;{% elif item.status == 'short' %}background:#fef2f2;{% endif %}">
+                    <td class="text-muted">{{ loop.index }}</td>
+                    <td>
+                        <span style="font-family:monospace; font-weight:600; font-size:0.9rem; {% if item.location_code == '재고부족' %}color:#ef4444;{% else %}color:#2563eb;{% endif %}">
+                            {{ item.location_code or '-' }}
+                        </span>
+                    </td>
+                    <td class="fw-semibold">{{ sku_map.get(item.sku_id, 'SKU#' ~ item.sku_id) }}</td>
+                    <td class="text-muted" style="font-size:0.8rem;">{{ item.lot_number or '-' }}</td>
+                    <td style="text-align:right; font-weight:600;">{{ item.expected_qty }}</td>
+                    <td style="text-align:right; font-weight:600; color:{% if item.picked_qty >= item.expected_qty %}#16a34a{% elif item.picked_qty > 0 %}#f59e0b{% else %}#94a3b8{% endif %};">
+                        {{ item.picked_qty or 0 }}
+                    </td>
+                    <td>
+                        {% if item.status == 'picked' %}<span class="status-badge status-done" style="font-size:0.7rem;">완료</span>
+                        {% elif item.status == 'short' %}<span class="status-badge status-error" style="font-size:0.7rem;">부족</span>
+                        {% else %}<span class="status-badge status-wait" style="font-size:0.7rem;">대기</span>
+                        {% endif %}
+                    </td>
+                    {% if pl.list_type == 'by_order' %}
+                    <td class="text-muted" style="font-size:0.8rem;">{{ item.order_id or '-' }}</td>
+                    {% endif %}
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center text-muted py-4">항목 없음</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

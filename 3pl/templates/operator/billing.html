@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}과금/청구 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>과금/청구</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">과금/청구</h4>
+
+<!-- 요금제 -->
+<div class="row g-3 mb-4">
+    {% for p in plans %}
+    <div class="col-md-4">
+        <div class="stat-card text-center">
+            <div class="stat-label">{{ p.name|upper }}</div>
+            <div class="stat-value">{{ '{:,}'.format(p.price) }}<span style="font-size:0.8rem;font-weight:400;">원/월</span></div>
+            <div class="stat-sub mt-2">
+                창고 {{ '무제한' if p.max_warehouses == -1 else p.max_warehouses }}개 ·
+                SKU {{ '무제한' if p.max_skus == -1 else p.max_skus }}개 ·
+                사용자 {{ '무제한' if p.max_users == -1 else p.max_users }}명
+            </div>
+            <div class="mt-2">
+                {% if p.has_video %}<span class="status-badge status-done">영상</span>{% endif %}
+                {% if p.has_api %}<span class="status-badge status-progress">API</span>{% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- 청구서 -->
+<div class="data-card mb-4">
+    <div class="data-card-header"><h6>청구서</h6></div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>월</th><th class="text-end">금액</th><th>상태</th><th>결제일</th></tr></thead>
+            <tbody>
+                {% for inv in invoices %}
+                <tr>
+                    <td class="fw-semibold">{{ inv.year_month }}</td>
+                    <td class="text-end">{{ '{:,.0f}'.format(inv.total_amount|default(0)) }}원</td>
+                    <td><span class="status-badge status-{% if inv.status == 'paid' %}done{% elif inv.status == 'overdue' %}error{% else %}wait{% endif %}">{{ inv.status }}</span></td>
+                    <td>{{ inv.paid_at[:10] if inv.paid_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-center text-muted py-3">청구서 없음</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 사용량 -->
+<div class="data-card">
+    <div class="data-card-header"><h6>사용량</h6></div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>월</th><th>항목</th><th class="text-end">건수</th><th class="text-end">단가</th><th class="text-end">소계</th></tr></thead>
+            <tbody>
+                {% for u in usage %}
+                <tr>
+                    <td>{{ u.year_month }}</td>
+                    <td>{{ u.metric }}</td>
+                    <td class="text-end">{{ u.count }}</td>
+                    <td class="text-end">{{ '{:,.0f}'.format(u.unit_price|default(0)) }}원</td>
+                    <td class="text-end fw-semibold">{{ '{:,.0f}'.format((u.count|default(0)) * (u.unit_price|default(0))) }}원</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-muted py-3">사용량 데이터 없음</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

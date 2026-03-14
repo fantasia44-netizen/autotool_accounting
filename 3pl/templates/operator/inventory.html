@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}재고현황 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>재고현황</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">재고현황</h4>
+
+<div class="filter-bar">
+    <form class="d-flex gap-2 w-100" method="get">
+        <input type="text" name="search" class="form-control" placeholder="상품명 검색" value="{{ filter_search or '' }}" style="max-width:200px;">
+        <select name="client_id" class="form-select" style="max-width:180px;">
+            <option value="">전체 고객사</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
+        <button class="btn btn-sm btn-primary">검색</button>
+    </form>
+</div>
+
+<div class="data-card">
+    <div class="data-card-header">
+        <h6>SKU별 재고</h6>
+        <span class="text-muted" style="font-size:0.8rem;">{{ skus|length }}개 상품</span>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>SKU코드</th><th>상품명</th><th>카테고리</th><th>보관</th><th class="text-end">총 재고</th></tr>
+            </thead>
+            <tbody>
+                {% for sku in skus %}
+                {% set total = namespace(qty=0) %}
+                {% for s in stocks if s.sku_id == sku.id %}
+                    {% set total.qty = total.qty + s.quantity %}
+                {% endfor %}
+                <tr>
+                    <td class="col-sticky"><code>{{ sku.sku_code }}</code></td>
+                    <td>{{ sku.name }}</td>
+                    <td>{{ sku.category or '-' }}</td>
+                    <td>
+                        {% if sku.storage_temp == 'cold' %}<span class="status-badge status-progress">냉장</span>
+                        {% elif sku.storage_temp == 'frozen' %}<span class="status-badge" style="background:#e0e7ff;color:#4338ca;">냉동</span>
+                        {% else %}<span class="status-badge status-neutral">상온</span>{% endif %}
+                    </td>
+                    <td class="text-end fw-semibold {% if total.qty <= 10 %}text-danger{% endif %}">{{ total.qty }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-muted py-4">재고 데이터가 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

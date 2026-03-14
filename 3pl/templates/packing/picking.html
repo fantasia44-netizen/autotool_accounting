@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+{% block title %}피킹모드 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>피킹모드</span>{% endblock %}
+
+{% block content %}
+<style>
+    .picking-location {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 2px;
+        line-height: 1.1;
+    }
+    .picking-sku {
+        font-size: 1.3rem;
+        font-weight: 600;
+    }
+    .picking-qty {
+        font-size: 2rem;
+        font-weight: 700;
+    }
+    .picking-item-card {
+        border: 2px solid var(--border);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        transition: all 0.2s;
+    }
+    .picking-item-card.active {
+        border-color: var(--accent);
+        background: rgba(58, 134, 255, 0.05);
+        box-shadow: 0 0 0 3px rgba(58, 134, 255, 0.15);
+    }
+    .picking-item-card.done {
+        border-color: #22c55e;
+        background: rgba(34, 197, 94, 0.05);
+        opacity: 0.7;
+    }
+    .picking-item-card.short {
+        border-color: #ef4444;
+        background: rgba(239, 68, 68, 0.05);
+    }
+    .scan-input-lg {
+        font-size: 1.5rem;
+        padding: 0.8rem 1rem;
+        text-align: center;
+        border: 2px solid var(--border);
+        border-radius: 10px;
+    }
+    .scan-input-lg:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(58, 134, 255, 0.2);
+    }
+    .progress-thick {
+        height: 12px;
+        border-radius: 6px;
+    }
+    .pick-success-flash {
+        animation: flashGreen 0.5s ease;
+    }
+    @keyframes flashGreen {
+        0%, 100% { background: transparent; }
+        50% { background: rgba(34, 197, 94, 0.15); }
+    }
+    .pick-error-banner {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        background: #ef4444;
+        color: #fff;
+        text-align: center;
+        font-size: 1.2rem;
+        font-weight: 600;
+        padding: 0.8rem;
+        z-index: 9999;
+        display: none;
+    }
+    .pick-error-banner.show { display: block; }
+</style>
+
+<!-- 에러 배너 -->
+<div id="pickErrorBanner" class="pick-error-banner"></div>
+
+<!-- 피킹리스트 선택 -->
+<div id="listSelectView">
+    <h4 class="page-title">피킹모드</h4>
+    <p class="text-muted mb-3">작업할 피킹리스트를 선택하세요.</p>
+
+    {% if lists %}
+    <div class="list-group">
+        {% for pl in lists %}
+        <a href="#" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center"
+           onclick="loadPickingList({{ pl.id }}); return false;">
+            <div>
+                <div class="fw-semibold">{{ pl.list_no }}</div>
+                <small class="text-muted">
+                    {{ {'by_order':'주문별','by_product':'상품별','by_location':'로케이션별'}.get(pl.list_type, pl.list_type) }}
+                    · 아이템 {{ pl.total_items }}건
+                </small>
+            </div>
+            <div class="text-end">
+                <span class="badge bg-{% if pl.status == 'in_progress' %}warning text-dark{% else %}primary{% endif %}">
+                    {{ {'created':'대기','in_progress':'진행중'}.get(pl.status, pl.status) }}
+                </span>
+                {% if pl.total_items > 0 %}
+                <div class="mt-1">
+                    <div class="progress progress-thick" style="width:80px;">
+                        <div class="progress-bar bg-success" style="width:{{ (pl.picked_items / pl.total_items * 100) if pl.total_items else 0 }}%"></div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+        <i class="bi bi-inbox" style="font-size:3rem;"></i>
+        <p class="mt-2">대기중인 피킹리스트가 없습니다.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 피킹 작업 화면 -->
+<div id="pickingWorkView" style="display:none;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0" id="pickingListTitle">-</h5>
+        <button class="btn btn-sm btn-outline-secondary" onclick="backToList()">
+            <i class="bi bi-arrow-left me-1"></i>목록
+        </button>
+    </div>
+
+    <!-- 진행률 -->
+    <div class="mb-3">
+        <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted" style="font-size:0.85rem;">진행률</span>
+            <span id="progressText" class="fw-semibold">0 / 0</span>
+        </div>
+        <div class="progress progress-thick">
+            <div id="progressBar" class="progress-bar bg-success" style="width:0%"></div>
+        </div>
+    </div>
+
+    <!-- 스캔 입력 -->
+    <div class="mb-3">
+        <input type="text" id="scanInput" class="form-control scan-input-lg"
+               placeholder="바코드 스캔" autofocus
+               onkeydown="if(event.key==='Enter'){confirmCurrentItem(); event.preventDefault();}">
+        <div class="text-center mt-1">
+            <small class="text-muted">스캔 또는 Enter로 현재 아이템 확인</small>
+        </div>
+    </div>
+
+    <!-- 피킹 아이템 목록 -->
+    <div id="pickingItems"></div>
+
+    <!-- 완료 버튼 -->
+    <div class="text-center mt-3" id="completeSection" style="display:none;">
+        <button class="btn btn-success btn-lg" onclick="completePickingList()">
+            <i class="bi bi-check-circle me-1"></i>피킹 완료
+        </button>
+    </div>
+</div>
+
+<script>
+let currentListId = null;
+let pickingItems = [];
+let currentItemIndex = 0;
+
+function loadPickingList(listId) {
+    currentListId = listId;
+    fetch(`/packing/api/picking/${listId}/items`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.items) { showError('피킹리스트를 불러올 수 없습니다.'); return; }
+            pickingItems = data.items;
+            currentItemIndex = 0;
+
+            // 이미 완료된 항목 건너뛰기
+            while (currentItemIndex < pickingItems.length &&
+                   pickingItems[currentItemIndex].status === 'picked') {
+                currentItemIndex++;
+            }
+
+            document.getElementById('listSelectView').style.display = 'none';
+            document.getElementById('pickingWorkView').style.display = 'block';
+            document.getElementById('pickingListTitle').textContent = data.list_no || `피킹 #${listId}`;
+
+            renderItems();
+            updateProgress();
+            focusScan();
+        })
+        .catch(() => showError('네트워크 오류'));
+}
+
+function renderItems() {
+    const container = document.getElementById('pickingItems');
+    container.innerHTML = '';
+
+    pickingItems.forEach((item, idx) => {
+        const isDone = item.status === 'picked';
+        const isShort = item.status === 'short';
+        const isActive = idx === currentItemIndex && !isDone && !isShort;
+
+        const card = document.createElement('div');
+        card.className = `picking-item-card ${isActive ? 'active' : ''} ${isDone ? 'done' : ''} ${isShort ? 'short' : ''}`;
+        card.id = `pick-item-${idx}`;
+
+        card.innerHTML = `
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <div class="picking-location">${item.location_code || '-'}</div>
+                    <div class="picking-sku mt-1">${item.sku_name || 'SKU #' + item.sku_id}</div>
+                    ${item.lot_number ? `<small class="text-muted">LOT: ${item.lot_number}</small>` : ''}
+                    ${item.order_id ? `<small class="text-muted d-block">주문 #${item.order_id}</small>` : ''}
+                </div>
+                <div class="text-end">
+                    <div class="picking-qty">${isDone ? item.picked_qty : item.expected_qty}</div>
+                    <small class="text-muted">${isDone ? '완료' : isShort ? '재고부족' : '수량'}</small>
+                    ${isDone ? '<div class="mt-1"><i class="bi bi-check-circle-fill text-success" style="font-size:1.5rem;"></i></div>' : ''}
+                    ${isShort ? '<div class="mt-1"><i class="bi bi-exclamation-circle-fill text-danger" style="font-size:1.5rem;"></i></div>' : ''}
+                </div>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+
+    // 현재 아이템으로 스크롤
+    const activeCard = document.getElementById(`pick-item-${currentItemIndex}`);
+    if (activeCard) activeCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function confirmCurrentItem() {
+    if (currentItemIndex >= pickingItems.length) return;
+
+    const item = pickingItems[currentItemIndex];
+    if (item.status === 'picked' || item.status === 'short') {
+        // 다음 미완료 아이템으로
+        moveToNextItem();
+        return;
+    }
+
+    const pickedQty = item.expected_qty; // 전량 피킹
+
+    fetch('/packing/api/picking/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            item_id: item.id,
+            picked_qty: pickedQty
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { showError(data.error); return; }
+
+        // 성공
+        item.status = 'picked';
+        item.picked_qty = pickedQty;
+        playSuccess();
+
+        const card = document.getElementById(`pick-item-${currentItemIndex}`);
+        if (card) card.classList.add('pick-success-flash');
+
+        moveToNextItem();
+        renderItems();
+        updateProgress();
+    })
+    .catch(() => showError('네트워크 오류'));
+
+    document.getElementById('scanInput').value = '';
+}
+
+function moveToNextItem() {
+    currentItemIndex++;
+    while (currentItemIndex < pickingItems.length &&
+           (pickingItems[currentItemIndex].status === 'picked' ||
+            pickingItems[currentItemIndex].status === 'short')) {
+        currentItemIndex++;
+    }
+
+    if (currentItemIndex >= pickingItems.length) {
+        // 전체 완료
+        document.getElementById('completeSection').style.display = 'block';
+    }
+    focusScan();
+}
+
+function updateProgress() {
+    const total = pickingItems.length;
+    const done = pickingItems.filter(i => i.status === 'picked').length;
+    document.getElementById('progressText').textContent = `${done} / ${total}`;
+    document.getElementById('progressBar').style.width = total ? `${(done / total * 100)}%` : '0%';
+}
+
+function completePickingList() {
+    fetch(`/operator/picking/${currentListId}/complete`, { method: 'POST' })
+        .then(r => {
+            if (r.redirected) { window.location.href = r.url; return; }
+            return r.json();
+        })
+        .then(data => {
+            if (data && data.error) { showError(data.error); return; }
+            alert('피킹이 완료되었습니다!');
+            backToList();
+        })
+        .catch(() => {
+            alert('피킹 완료 처리됨');
+            backToList();
+        });
+}
+
+function backToList() {
+    document.getElementById('pickingWorkView').style.display = 'none';
+    document.getElementById('listSelectView').style.display = 'block';
+    currentListId = null;
+    pickingItems = [];
+    currentItemIndex = 0;
+}
+
+function focusScan() {
+    setTimeout(() => document.getElementById('scanInput')?.focus(), 100);
+}
+
+function showError(msg) {
+    const banner = document.getElementById('pickErrorBanner');
+    banner.textContent = msg;
+    banner.classList.add('show');
+    playError();
+    setTimeout(() => banner.classList.remove('show'), 3000);
+}
+
+function playSuccess() {
+    try {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = 880;
+        osc.type = 'sine';
+        gain.gain.value = 0.15;
+        osc.start(); osc.stop(ctx.currentTime + 0.12);
+    } catch(e) {}
+}
+
+function playError() {
+    try {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = 300;
+        osc.type = 'square';
+        gain.gain.value = 0.2;
+        osc.start(); osc.stop(ctx.currentTime + 0.3);
+    } catch(e) {}
+}
+
+// 페이지 로드 시 자동 포커스
+document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('scanInput');
+    if (input) input.focus();
+});
+</script>
+{% endblock %}

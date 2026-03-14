@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}출고관리 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>출고관리</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">출고관리</h4>
+
+<!-- 유형 탭 -->
+<div class="d-flex gap-2 mb-3">
+    {% for t, label in [('normal','일반출고'),('return','반품출고'),('transfer','창고이동')] %}
+    <a href="{{ url_for('operator.shipments', type=t) }}" class="btn btn-sm {% if filter_type == t %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+        {{ label }}
+    </a>
+    {% endfor %}
+</div>
+
+<!-- 상태 필터 -->
+<div class="d-flex gap-2 mb-3">
+    <a href="{{ url_for('operator.shipments', type=filter_type) }}" class="btn btn-sm {% if not filter_status %}btn-dark{% else %}btn-outline-dark{% endif %}" style="font-size:0.78rem;">전체</a>
+    {% for s, label in [('pending','대기'),('shipped','출고'),('in_transit','배송중'),('delivered','완료')] %}
+    <a href="{{ url_for('operator.shipments', type=filter_type, status=s) }}" class="btn btn-sm {% if filter_status == s %}btn-dark{% else %}btn-outline-dark{% endif %}" style="font-size:0.78rem;">
+        {{ label }} {{ counts.get(s, 0) }}
+    </a>
+    {% endfor %}
+</div>
+
+{% if filter_type == 'return' %}
+<!-- 반품출고 등록 -->
+<div class="data-card mb-3">
+    <div class="data-card-header">
+        <h6 class="mb-0"><i class="bi bi-arrow-return-left me-1"></i>반품출고 등록</h6>
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('returnForm').classList.toggle('d-none')">
+            <i class="bi bi-plus"></i> 등록
+        </button>
+    </div>
+    <div id="returnForm" class="d-none">
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.shipment_return_create') }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">고객사 *</label>
+                        <select name="client_id" class="form-select form-select-sm" required>
+                            <option value="">선택</option>
+                            {% for c in clients %}
+                            <option value="{{ c.id }}">{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">상품 *</label>
+                        <select name="sku_id" class="form-select form-select-sm" required>
+                            <option value="">선택</option>
+                            {% for s in skus %}
+                            <option value="{{ s.id }}">{{ s.sku_code }} — {{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label" style="font-size:0.75rem;">수량 *</label>
+                        <input type="number" name="quantity" class="form-control form-control-sm" min="1" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">반품사유</label>
+                        <input type="text" name="reason" class="form-control form-control-sm" placeholder="사유 입력">
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">등록</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('returnForm').classList.add('d-none')">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if filter_type == 'transfer' %}
+<!-- 창고이동 등록 -->
+<div class="data-card mb-3">
+    <div class="data-card-header">
+        <h6 class="mb-0"><i class="bi bi-arrow-left-right me-1"></i>창고이동 등록</h6>
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('transferForm').classList.toggle('d-none')">
+            <i class="bi bi-plus"></i> 등록
+        </button>
+    </div>
+    <div id="transferForm" class="d-none">
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.shipment_transfer_create') }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">출발 창고 *</label>
+                        <select name="from_warehouse_id" class="form-select form-select-sm" required>
+                            <option value="">선택</option>
+                            {% for w in warehouses %}
+                            <option value="{{ w.id }}">{{ w.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">도착 창고 *</label>
+                        <select name="to_warehouse_id" class="form-select form-select-sm" required>
+                            <option value="">선택</option>
+                            {% for w in warehouses %}
+                            <option value="{{ w.id }}">{{ w.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">상품 *</label>
+                        <select name="sku_id" class="form-select form-select-sm" required>
+                            <option value="">선택</option>
+                            {% for s in skus %}
+                            <option value="{{ s.id }}">{{ s.sku_code }} — {{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label" style="font-size:0.75rem;">수량 *</label>
+                        <input type="number" name="quantity" class="form-control form-control-sm" min="1" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">사유</label>
+                        <input type="text" name="reason" class="form-control form-control-sm" placeholder="이동 사유">
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">등록</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('transferForm').classList.add('d-none')">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- 목록 -->
+<div class="data-card">
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    {% if filter_type == 'normal' %}
+                    <th>주문ID</th><th>고객사</th><th>택배사</th><th>송장번호</th><th>상태</th><th>출고일</th><th>배달일</th>
+                    {% elif filter_type == 'return' %}
+                    <th>ID</th><th>고객사</th><th>상품</th><th class="text-end">수량</th><th>사유</th><th>상태</th><th>등록일</th>
+                    {% else %}
+                    <th>ID</th><th>상품</th><th class="text-end">수량</th><th>출발</th><th>도착</th><th>상태</th><th>등록일</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in shipments %}
+                <tr>
+                    {% if filter_type == 'normal' %}
+                    <td>{% if s.order_id %}<a href="{{ url_for('operator.order_detail', order_id=s.order_id) }}">{{ s.order_id }}</a>{% else %}-{% endif %}</td>
+                    <td>{{ client_map.get(s.client_id, '-') }}</td>
+                    <td>{{ s.courier or '-' }}</td>
+                    <td class="fw-semibold">{{ s.invoice_no or '-' }}</td>
+                    <td><span class="status-badge status-{% if s.status == 'delivered' %}done{% elif s.status in ('shipped','in_transit') %}progress{% else %}wait{% endif %}">{{ s.status }}</span></td>
+                    <td>{{ s.shipped_at[:10] if s.shipped_at else '-' }}</td>
+                    <td>{{ s.delivered_at[:10] if s.delivered_at else '-' }}</td>
+                    {% elif filter_type == 'return' %}
+                    <td>{{ s.id }}</td>
+                    <td>{{ client_map.get(s.client_id, '-') }}</td>
+                    <td>{{ s.sku_id or '-' }}</td>
+                    <td class="text-end fw-semibold">{{ s.quantity or '-' }}</td>
+                    <td>{{ s.reason or '-' }}</td>
+                    <td><span class="status-badge status-{% if s.status == 'delivered' %}done{% elif s.status == 'shipped' %}progress{% else %}wait{% endif %}">{{ s.status }}</span></td>
+                    <td class="text-muted">{{ s.created_at[:10] if s.created_at else '-' }}</td>
+                    {% else %}
+                    <td>{{ s.id }}</td>
+                    <td>{{ s.sku_id or '-' }}</td>
+                    <td class="text-end fw-semibold">{{ s.quantity or '-' }}</td>
+                    <td>{{ s.from_warehouse_id or '-' }}</td>
+                    <td>{{ s.to_warehouse_id or '-' }}</td>
+                    <td><span class="status-badge status-{% if s.status == 'delivered' %}done{% elif s.status == 'shipped' %}progress{% else %}wait{% endif %}">{{ s.status }}</span></td>
+                    <td class="text-muted">{{ s.created_at[:10] if s.created_at else '-' }}</td>
+                    {% endif %}
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">출고 내역이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}상품마스터 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>상품마스터</span>{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0">상품마스터 (SKU)</h4>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('operator.sku_sample_excel') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-download me-1"></i>샘플 다운로드
+        </a>
+        <button class="btn btn-sm btn-outline-primary" onclick="document.getElementById('excelUploadForm').classList.toggle('d-none')">
+            <i class="bi bi-upload me-1"></i>엑셀 업로드
+        </button>
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('newSkuForm').classList.toggle('d-none')">
+            <i class="bi bi-plus"></i> 상품 등록
+        </button>
+    </div>
+</div>
+
+<!-- 엑셀 업로드 폼 -->
+<div id="excelUploadForm" class="d-none mb-3">
+    <div class="data-card">
+        <div class="data-card-header"><h6>엑셀 일괄 업로드</h6></div>
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.sku_bulk_upload') }}" enctype="multipart/form-data">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">엑셀 파일 (.xlsx)</label>
+                        <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx,.xls" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">고객사 (선택)</label>
+                        <select name="client_id" class="form-select form-select-sm">
+                            <option value="">전체 (미지정)</option>
+                            {% for c in clients %}
+                            <option value="{{ c.id }}">{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <button type="submit" class="btn btn-primary btn-sm">업로드</button>
+                    </div>
+                </div>
+                <div class="text-muted mt-2" style="font-size:0.75rem;">
+                    헤더: sku_code(필수), barcode(필수), name(필수), category, unit, storage_temp, weight_g, memo
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 등록 폼 -->
+<div id="newSkuForm" class="d-none mb-3">
+    <div class="data-card">
+        <div class="data-card-header"><h6>새 상품</h6></div>
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.sku_create') }}">
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <input type="text" name="sku_code" class="form-control form-control-sm" placeholder="SKU코드 *" required>
+                    </div>
+                    <div class="col-md-3">
+                        <input type="text" name="barcode" class="form-control form-control-sm" placeholder="바코드 *" required>
+                    </div>
+                    <div class="col-md-3">
+                        <input type="text" name="name" class="form-control form-control-sm" placeholder="상품명 *" required>
+                    </div>
+                    <div class="col-md-3">
+                        <select name="client_id" class="form-select form-select-sm">
+                            <option value="">고객사 선택</option>
+                            {% for c in clients %}
+                            <option value="{{ c.id }}">{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <input type="text" name="category" class="form-control form-control-sm" placeholder="카테고리">
+                    </div>
+                    <div class="col-md-2">
+                        <select name="unit" class="form-select form-select-sm">
+                            <option value="EA">EA(개)</option>
+                            <option value="BOX">BOX(박스)</option>
+                            <option value="PALLET">PALLET(팔레트)</option>
+                            <option value="PACK">PACK(팩)</option>
+                            <option value="SET">SET(세트)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select name="storage_temp" class="form-select form-select-sm">
+                            <option value="ambient">상온</option>
+                            <option value="cold">냉장</option>
+                            <option value="frozen">냉동</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <input type="number" name="weight_g" class="form-control form-control-sm" placeholder="중량(g)">
+                    </div>
+                    <div class="col-md-2">
+                        <input type="text" name="memo" class="form-control form-control-sm" placeholder="메모">
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-primary btn-sm w-100">등록</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 필터 -->
+<div class="filter-bar">
+    <form class="d-flex gap-2 w-100" method="get">
+        <input type="text" name="search" class="form-control" placeholder="상품명 검색" value="{{ filter_search or '' }}" style="max-width:200px;">
+        <select name="client_id" class="form-select" style="max-width:180px;">
+            <option value="">전체 고객사</option>
+            {% for c in clients %}
+            <option value="{{ c.id }}" {% if filter_client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
+        <button class="btn btn-sm btn-primary">검색</button>
+    </form>
+</div>
+
+<!-- 테이블 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6>상품 목록</h6>
+        <span class="text-muted" style="font-size:0.8rem;">{{ skus|length }}개</span>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>SKU코드</th><th>바코드</th><th>상품명</th><th>카테고리</th><th>단위</th><th>보관</th><th>중량</th></tr>
+            </thead>
+            <tbody>
+                {% for s in skus %}
+                <tr>
+                    <td class="col-sticky"><code>{{ s.sku_code }}</code></td>
+                    <td>{{ s.barcode or '-' }}</td>
+                    <td class="fw-semibold">{{ s.name }}</td>
+                    <td>{{ s.category or '-' }}</td>
+                    <td>{{ s.unit }}</td>
+                    <td>
+                        {% if s.storage_temp == 'cold' %}<span class="status-badge status-progress">냉장</span>
+                        {% elif s.storage_temp == 'frozen' %}<span class="status-badge" style="background:#e0e7ff;color:#4338ca;">냉동</span>
+                        {% else %}<span class="status-badge status-neutral">상온</span>{% endif %}
+                    </td>
+                    <td>{{ s.weight_g or '-' }}g</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">등록된 상품이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

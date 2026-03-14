@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}창고관리 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>창고관리</span>{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0">창고관리</h4>
+    <button class="btn btn-primary btn-sm" onclick="document.getElementById('whAddForm').classList.toggle('d-none')">
+        <i class="bi bi-plus-lg me-1"></i>창고 추가
+    </button>
+</div>
+
+<!-- 창고 추가 폼 -->
+<div id="whAddForm" class="d-none mb-3">
+    <div class="data-card">
+        <div class="data-card-body">
+            <form method="post" action="{{ url_for('operator.warehouse_create') }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">창고명 *</label>
+                        <input type="text" name="name" class="form-control form-control-sm" placeholder="메인 창고" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">주소</label>
+                        <input type="text" name="address" class="form-control form-control-sm" placeholder="경기도 김포시...">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">보관유형</label>
+                        <select name="storage_type" class="form-select form-select-sm">
+                            <option value="ambient">상온 (Ambient)</option>
+                            <option value="cold">냉장 (Cold)</option>
+                            <option value="frozen">냉동 (Frozen)</option>
+                            <option value="mixed">혼합 (Mixed)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">메모</label>
+                        <input type="text" name="memo" class="form-control form-control-sm" placeholder="비고">
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">추가</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('whAddForm').classList.add('d-none')">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    {% for wh in warehouses %}
+    <div class="col-md-6 col-lg-4">
+        <div class="stat-card">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <div class="stat-label">{{ wh.storage_type|upper if wh.storage_type else 'AMBIENT' }}</div>
+                    <h5 class="fw-bold mb-1">{{ wh.name }}</h5>
+                    <div class="text-muted" style="font-size:0.8rem;">{{ wh.address or '-' }}</div>
+                </div>
+                <span class="status-badge {% if wh.is_active %}status-done{% else %}status-error{% endif %}">
+                    {{ '운영중' if wh.is_active else '비활성' }}
+                </span>
+            </div>
+            <div class="mt-3">
+                <a href="{{ url_for('operator.warehouse_detail', wh_id=wh.id) }}" class="btn btn-sm btn-outline-primary">구역/로케이션</a>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12">
+        <div class="text-center text-muted py-5">등록된 창고가 없습니다. 위 "창고 추가" 버튼으로 시작하세요.</div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

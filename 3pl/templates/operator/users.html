@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}사용자관리 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>사용자관리</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title">사용자관리</h4>
+
+<!-- 승인 대기 -->
+{% if pending %}
+<div class="data-card mb-4" style="border-color:#f59e0b;">
+    <div class="data-card-header" style="background:#fef9c3;">
+        <h6><i class="bi bi-exclamation-triangle me-1 text-warning"></i>승인 대기 ({{ pending|length }})</h6>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>이름</th><th>아이디</th><th>역할</th><th>신청일</th><th></th></tr></thead>
+            <tbody>
+                {% for u in pending %}
+                <tr>
+                    <td class="fw-semibold">{{ u.name }}</td>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.role }}</td>
+                    <td class="text-muted">{{ u.created_at[:10] if u.created_at else '-' }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('operator.user_approve', user_id=u.id) }}" style="display:inline;">
+                            <button class="btn btn-sm btn-success">승인</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- 전체 사용자 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6>전체 사용자</h6>
+        <span class="text-muted" style="font-size:0.8rem;">{{ users|length }}명</span>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>이름</th><th>아이디</th><th>역할</th><th>이메일</th><th>승인</th><th>가입일</th></tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td class="fw-semibold">{{ u.name }}</td>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.role }}</td>
+                    <td>{{ u.email or '-' }}</td>
+                    <td>
+                        {% if u.is_approved %}<span class="status-badge status-done">승인</span>
+                        {% else %}<span class="status-badge status-wait">대기</span>{% endif %}
+                    </td>
+                    <td class="text-muted">{{ u.created_at[:10] if u.created_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">사용자가 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

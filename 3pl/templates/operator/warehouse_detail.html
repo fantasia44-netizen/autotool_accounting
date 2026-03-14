@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}{{ warehouse.name }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{{ url_for('operator.warehouses') }}" class="text-decoration-none">창고관리</a>
+<span class="mx-1">/</span>
+<span>{{ warehouse.name }}</span>
+{% endblock %}
+
+{% block content %}
+<!-- 창고 정보 -->
+<div class="data-card mb-3">
+    <div class="data-card-header">
+        <h6 class="mb-0"><i class="bi bi-house-gear me-1"></i>{{ warehouse.name }}</h6>
+        <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('whEditForm').classList.toggle('d-none')">
+            <i class="bi bi-pencil"></i> 수정
+        </button>
+    </div>
+    <div class="data-card-body">
+        <div class="row g-3" id="whInfo">
+            <div class="col-md-3">
+                <div class="text-muted" style="font-size:0.75rem;">주소</div>
+                <div>{{ warehouse.address or '-' }}</div>
+            </div>
+            <div class="col-md-2">
+                <div class="text-muted" style="font-size:0.75rem;">보관유형</div>
+                <div>{{ warehouse.storage_type|upper if warehouse.storage_type else 'AMBIENT' }}</div>
+            </div>
+            <div class="col-md-2">
+                <div class="text-muted" style="font-size:0.75rem;">상태</div>
+                <div>
+                    {% if warehouse.is_active %}<span class="status-badge status-done">운영중</span>
+                    {% else %}<span class="status-badge status-error">비활성</span>{% endif %}
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted" style="font-size:0.75rem;">메모</div>
+                <div>{{ warehouse.memo or '-' }}</div>
+            </div>
+        </div>
+        <!-- 수정 폼 -->
+        <div id="whEditForm" class="d-none mt-3" style="background:#f8fafc; border-radius:8px; padding:12px;">
+            <form method="post" action="{{ url_for('operator.warehouse_update', wh_id=warehouse.id) }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">창고명</label>
+                        <input type="text" name="name" class="form-control form-control-sm" value="{{ warehouse.name }}" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">주소</label>
+                        <input type="text" name="address" class="form-control form-control-sm" value="{{ warehouse.address or '' }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">보관유형</label>
+                        <select name="storage_type" class="form-select form-select-sm">
+                            {% for val, label in [('ambient','상온'),('cold','냉장'),('frozen','냉동'),('mixed','혼합')] %}
+                            <option value="{{ val }}" {% if warehouse.storage_type == val %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">메모</label>
+                        <input type="text" name="memo" class="form-control form-control-sm" value="{{ warehouse.memo or '' }}">
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">저장</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('whEditForm').classList.add('d-none')">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 구역 (Zone) -->
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <h5 class="mb-0">구역 (Zone)</h5>
+    <button class="btn btn-sm btn-primary" onclick="document.getElementById('zoneAddForm').classList.toggle('d-none')">
+        <i class="bi bi-plus-lg me-1"></i>구역 추가
+    </button>
+</div>
+
+<!-- 구역 추가 폼 -->
+<div id="zoneAddForm" class="d-none mb-3">
+    <div class="data-card">
+        <div class="data-card-body">
+            <form method="post" action="{{ url_for('operator.zone_create', wh_id=warehouse.id) }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">구역명 *</label>
+                        <input type="text" name="name" class="form-control form-control-sm" placeholder="A동, B동, 냉장구역" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">보관온도</label>
+                        <select name="storage_temp" class="form-select form-select-sm">
+                            <option value="ambient">상온</option>
+                            <option value="cold">냉장</option>
+                            <option value="frozen">냉동</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">메모</label>
+                        <input type="text" name="memo" class="form-control form-control-sm" placeholder="비고">
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">추가</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('zoneAddForm').classList.add('d-none')">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% for zone in zones %}
+<div class="data-card mb-3">
+    <div class="data-card-header">
+        <h6 class="mb-0">
+            <i class="bi bi-grid-3x3-gap me-1"></i>{{ zone.name }}
+            <span class="status-badge ms-2 status-{% if zone.storage_temp == 'cold' %}progress{% elif zone.storage_temp == 'frozen' %}neutral{% else %}done{% endif %}">
+                {{ zone.storage_temp or 'ambient' }}
+            </span>
+        </h6>
+        <button class="btn btn-sm btn-outline-primary" onclick="document.getElementById('locForm{{ zone.id }}').classList.toggle('d-none')">
+            <i class="bi bi-plus"></i> 로케이션 추가
+        </button>
+    </div>
+    <div class="data-card-body">
+        {% if zone.memo %}
+        <div class="text-muted mb-2" style="font-size:0.82rem;">{{ zone.memo }}</div>
+        {% endif %}
+
+        <!-- 로케이션 추가 폼 -->
+        <div id="locForm{{ zone.id }}" class="d-none mb-3" style="background:#f8fafc; border-radius:8px; padding:12px;">
+            <form method="post" action="{{ url_for('operator.location_create', wh_id=warehouse.id) }}">
+                <input type="hidden" name="zone_id" value="{{ zone.id }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">로케이션 코드 *</label>
+                        <input type="text" name="code" class="form-control form-control-sm" placeholder="A-01-01" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" style="font-size:0.75rem;">유형</label>
+                        <select name="location_type" class="form-select form-select-sm">
+                            <option value="shelf">선반 (Shelf)</option>
+                            <option value="floor">바닥 (Floor)</option>
+                            <option value="rack">랙 (Rack)</option>
+                            <option value="pallet">팔레트 (Pallet)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">메모</label>
+                        <input type="text" name="memo" class="form-control form-control-sm" placeholder="비고">
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">추가</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('locForm{{ zone.id }}').classList.add('d-none')">취소</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- 로케이션 목록 -->
+        {% set locations = zone.get('locations', []) %}
+        {% if locations %}
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>코드</th><th>유형</th><th>메모</th></tr>
+            </thead>
+            <tbody>
+                {% for loc in locations %}
+                <tr>
+                    <td class="fw-semibold" style="font-family:monospace;">{{ loc.code }}</td>
+                    <td><span class="status-badge status-neutral">{{ loc.location_type or 'shelf' }}</span></td>
+                    <td class="text-muted">{{ loc.memo or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="text-center text-muted py-3" style="font-size:0.85rem;">로케이션이 없습니다. 위 버튼으로 추가하세요.</div>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<div class="text-center text-muted py-5">구역이 등록되지 않았습니다. 위 "구역 추가" 버튼으로 시작하세요.</div>
+{% endfor %}
+{% endblock %}
