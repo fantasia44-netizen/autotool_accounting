@@ -263,10 +263,12 @@ def shipment_return_create():
     """반품출고 생성."""
     from db_utils import get_repo
     repo = get_repo('order')
+    inv_repo = get_repo('inventory')
     client_id = request.form.get('client_id', type=int)
     sku_id = request.form.get('sku_id', type=int)
     quantity = request.form.get('quantity', type=int)
     reason = request.form.get('reason', '').strip()
+    location_id = request.form.get('location_id', type=int)
 
     if not all([client_id, sku_id, quantity]):
         flash('필수 항목을 입력해주세요.', 'warning')
@@ -280,6 +282,21 @@ def shipment_return_create():
         'reason': reason,
         'status': 'pending',
     })
+
+    # 재고 복원: movement 기록 + stock 수량 증가
+    inv_repo.log_movement({
+        'sku_id': sku_id,
+        'movement_type': 'return_in',
+        'quantity': quantity,
+        'memo': f'반품입고: {reason}' if reason else '반품입고',
+        'user_id': current_user.id,
+    })
+    if location_id:
+        try:
+            inv_repo.adjust_stock(sku_id, location_id, delta=quantity)
+        except Exception:
+            logger.exception('반품 재고 수량 반영 실패: sku_id=%s, location_id=%s', sku_id, location_id)
+
     # 반품비 과금
     try:
         from services.client_billing_service import record_return_fee
