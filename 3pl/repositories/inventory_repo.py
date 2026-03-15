@@ -97,9 +97,32 @@ class InventoryRepository(BaseRepository):
         return None
 
     def get_low_stock_items(self, threshold=10):
-        """부족 재고 목록."""
-        rows = self.list_all_stock()
-        return [r for r in rows if r.get('quantity', 0) <= threshold]
+        """부족 재고 목록 (SKU별 min_stock_qty 우선, 없으면 threshold)."""
+        stocks = self.list_all_stock()
+        skus = self.list_skus() or []
+        sku_map = {s['id']: s for s in skus}
+
+        # SKU별 재고 합산
+        sku_totals = {}
+        for st in stocks:
+            sid = st.get('sku_id')
+            sku_totals[sid] = sku_totals.get(sid, 0) + st.get('quantity', 0)
+
+        low_items = []
+        for sid, qty in sku_totals.items():
+            sku = sku_map.get(sid, {})
+            min_qty = sku.get('min_stock_qty') or threshold
+            if qty <= min_qty:
+                low_items.append({
+                    'sku_id': sid,
+                    'sku_code': sku.get('sku_code', ''),
+                    'sku_name': sku.get('name', ''),
+                    'client_id': sku.get('client_id'),
+                    'quantity': qty,
+                    'min_stock_qty': min_qty,
+                    'storage_temp': sku.get('storage_temp', 'ambient'),
+                })
+        return low_items
 
     def get_expiring_soon(self, days=30):
         """유통기한 임박 재고 (days일 이내)."""
@@ -107,6 +130,14 @@ class InventoryRepository(BaseRepository):
         cutoff = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
         return self._query(self.STOCK_TABLE,
                            filters=[('expiry_date', 'lte', cutoff)],
+                           order_by='expiry_date', order_desc=False)
+
+    def get_expired_stock(self):
+        """유통기한 만료 재고 (오늘 기준)."""
+        from datetime import datetime
+        today = datetime.now().strftime('%Y-%m-%d')
+        return self._query(self.STOCK_TABLE,
+                           filters=[('expiry_date', 'lte', today)],
                            order_by='expiry_date', order_desc=False)
 
     # ── 재고 예약 ──

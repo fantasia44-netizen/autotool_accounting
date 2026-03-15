@@ -52,6 +52,7 @@ PAGE_REGISTRY = {
     'client.inventory':    {'label': '재고조회',     'icon': 'bi-boxes',          'portal': 'client', 'min_role': 'client_viewer'},
     'client.orders':       {'label': '주문현황',     'icon': 'bi-cart3',          'portal': 'client', 'min_role': 'client_viewer'},
     'client.videos':       {'label': '출고영상',     'icon': 'bi-camera-video',   'portal': 'client', 'min_role': 'client_viewer'},
+    'client.billing':      {'label': '과금내역',     'icon': 'bi-receipt',        'portal': 'client', 'min_role': 'client_viewer'},
     # ── Packing 포털 ──
     'packing.dashboard':   {'label': '작업현황',     'icon': 'bi-speedometer2',   'portal': 'packing', 'min_role': 'packing_worker'},
     'packing.queue':       {'label': '작업큐',       'icon': 'bi-list-task',      'portal': 'packing', 'min_role': 'packing_worker'},
@@ -71,7 +72,7 @@ MENU_GROUPS = {
         {'label': '설정',     'icon': 'bi-sliders2',       'items': ['operator.billing', 'operator.users']},
     ],
     'client': [
-        {'label': '내 물류',  'icon': 'bi-box',            'items': ['client.dashboard', 'client.inventory', 'client.orders', 'client.videos']},
+        {'label': '내 물류',  'icon': 'bi-box',            'items': ['client.dashboard', 'client.inventory', 'client.orders', 'client.videos', 'client.billing']},
     ],
     'packing': [
         {'label': '패킹',    'icon': 'bi-box-seam',       'items': ['packing.dashboard', 'packing.picking', 'packing.recording', 'packing.queue', 'packing.scan', 'packing.stats']},

@@ -3,7 +3,10 @@
 {% block breadcrumb %}<span>이력조회</span>{% endblock %}
 
 {% block content %}
-<h4 class="page-title">이력조회</h4>
+<div class="d-flex justify-content-between align-items-center">
+    <h4 class="page-title mb-0">이력조회</h4>
+    <a href="{{ url_for('operator.ledger_export', sku_id=filter_sku_id, type=filter_type, date_from=filter_date_from, date_to=filter_date_to) }}" class="btn btn-sm btn-outline-success"><i class="bi bi-download me-1"></i>엑셀</a>
+</div>
 
 <div class="filter-bar">
     <form class="d-flex gap-2 w-100 flex-wrap" method="get">

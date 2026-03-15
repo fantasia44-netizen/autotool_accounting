@@ -33,6 +33,7 @@
             {% endwith %}
 
             <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="mb-3">
                     <label class="form-label" style="font-size:0.85rem;font-weight:600;">아이디</label>
                     <input type="text" name="username" class="form-control" placeholder="아이디를 입력하세요" required autofocus>

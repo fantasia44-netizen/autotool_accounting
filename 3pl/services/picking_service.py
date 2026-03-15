@@ -48,7 +48,10 @@ def generate_picking_list(picking_repo, order_repo, inv_repo, wh_repo,
         needed = demand['total_qty']
         stocks = inv_repo.list_stock_by_sku(sku_id)
 
-        # 유통기한 오름차순 정렬 (FIFO)
+        # 유통기한 만료 재고 제외 + 오름차순 정렬 (FIFO)
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        stocks = [s for s in stocks
+                  if not s.get('expiry_date') or s['expiry_date'] >= today]
         stocks.sort(key=lambda s: s.get('expiry_date') or '9999-12-31')
 
         remaining = needed

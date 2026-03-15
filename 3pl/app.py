@@ -32,6 +32,7 @@ def create_app(config_class=None):
         app.supabase = None
 
     # ── Extensions ──
+    _init_csrf(app)
     _init_login(app)
     _init_repositories(app)
     _register_blueprints(app)
@@ -48,6 +49,13 @@ def create_app(config_class=None):
         return render_template('landing/index.html')
 
     return app
+
+
+def _init_csrf(app):
+    """CSRF 보호 초기화 (Flask-WTF)."""
+    from flask_wtf.csrf import CSRFProtect
+    csrf = CSRFProtect(app)
+    app.csrf = csrf
 
 
 def _init_login(app):
@@ -116,6 +124,10 @@ def _register_blueprints(app):
     app.register_blueprint(client_bp, url_prefix='/client')
     app.register_blueprint(packing_bp, url_prefix='/packing')
     app.register_blueprint(api_bp, url_prefix='/api/v1')
+
+    # API 블루프린트는 CSRF 면제 (토큰 인증 사용)
+    if hasattr(app, 'csrf'):
+        app.csrf.exempt(api_bp)
 
 
 def _register_hooks(app):

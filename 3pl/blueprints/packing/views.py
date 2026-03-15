@@ -308,6 +308,10 @@ def api_complete_job():
 
     if not job_id or not video_file:
         return jsonify({'ok': False, 'error': '필수 데이터 누락'})
+    # 영상 MIME 검증
+    allowed_video = ('video/webm', 'video/mp4', 'video/ogg', 'video/quicktime')
+    if video_file.content_type not in allowed_video:
+        return jsonify({'ok': False, 'error': f'허용되지 않는 파일 형식: {video_file.content_type}'})
 
     from db_utils import get_repo
     repo = get_repo('packing')

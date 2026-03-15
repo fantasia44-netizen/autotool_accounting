@@ -77,7 +77,7 @@ def order_status_update(order_id):
     repo.update_order_status(order_id, new_status)
     repo.log_status_change(order_id, old_status, new_status,
                            changed_by=current_user.id, reason=reason)
-    # 출고 시 과금 기록
+    # 출고 시 과금 기록 (서비스 내부에서 DLQ 처리)
     if new_status == 'shipped' and order:
         try:
             cid = order.get('client_id')
@@ -87,8 +87,7 @@ def order_status_update(order_id):
                                     get_repo('client_rate'), cid,
                                     order_id=order_id)
         except Exception:
-            logger.exception('과금 기록 실패 (출고): order_id=%s, client_id=%s',
-                             order_id, order.get('client_id'))
+            logger.exception('과금 서비스 호출 자체 실패 (출고): order_id=%s', order_id)
     flash(f'주문 상태가 "{new_status}"로 변경되었습니다.', 'success')
     return redirect(url_for('operator.order_detail', order_id=order_id))
 
@@ -297,13 +296,13 @@ def shipment_return_create():
         except Exception:
             logger.exception('반품 재고 수량 반영 실패: sku_id=%s, location_id=%s', sku_id, location_id)
 
-    # 반품비 과금
+    # 반품비 과금 (서비스 내부에서 DLQ 처리)
     try:
         from services.client_billing_service import record_return_fee
         record_return_fee(get_repo('client_billing'),
                           get_repo('client_rate'), client_id, memo=reason)
     except Exception:
-        logger.exception('과금 기록 실패 (반품): client_id=%s', client_id)
+        logger.exception('과금 서비스 호출 자체 실패 (반품): client_id=%s', client_id)
     flash(f'반품출고 등록 완료 ({quantity}개)', 'success')
     return redirect(url_for('operator.shipments', type='return'))
 

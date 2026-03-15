@@ -12,22 +12,52 @@ from . import operator_bp, _require_operator
 @_require_operator
 def dashboard():
     from db_utils import get_repo
+    from datetime import datetime, timezone
     order_repo = get_repo('order')
     inv_repo = get_repo('inventory')
     client_repo = get_repo('client')
+    billing_repo = get_repo('client_billing')
 
     order_counts = order_repo.count_by_status() or {}
     recent_orders = order_repo.get_recent_orders(limit=5) or []
     total_skus = inv_repo.count_skus() or 0
     low_stock = inv_repo.get_low_stock_items(threshold=10) or []
+    expiring_soon = inv_repo.get_expiring_soon(days=7) or []
     clients = client_repo.list_clients() or []
+
+    # KPI: 출고 처리량
+    shipped_count = order_counts.get('shipped', 0) + order_counts.get('delivered', 0)
+    total_orders = sum(order_counts.values()) if order_counts else 0
+    pending_orders = order_counts.get('pending', 0) + order_counts.get('confirmed', 0)
+
+    # KPI: 클라이언트별 월매출
+    ym = datetime.now(timezone.utc).strftime('%Y-%m')
+    client_revenue = {}
+    for c in clients:
+        try:
+            summary = billing_repo.get_monthly_summary(c['id'], ym)
+            client_revenue[c['id']] = {
+                'name': c.get('company_name', c.get('name', '')),
+                'total': summary.get('total', 0),
+            }
+        except Exception:
+            pass
+    monthly_total = sum(v['total'] for v in client_revenue.values())
 
     return render_template('operator/dashboard.html',
                            order_counts=order_counts,
                            recent_orders=recent_orders,
                            total_skus=total_skus,
+                           low_stock=low_stock,
                            low_stock_count=len(low_stock),
-                           client_count=len(clients))
+                           expiring_soon_count=len(expiring_soon),
+                           client_count=len(clients),
+                           shipped_count=shipped_count,
+                           total_orders=total_orders,
+                           pending_orders=pending_orders,
+                           client_revenue=client_revenue,
+                           monthly_total=monthly_total,
+                           current_month=ym)
 
 
 # ═══ 과금/청구 (SaaS 플랜) ═══

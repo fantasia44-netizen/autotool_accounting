@@ -50,7 +50,7 @@ def inbound():
                             lot_number=lot_number, memo=memo,
                             user_id=current_user.id)
             flash(f'{quantity}개 입고 완료', 'success')
-            # 과금 기록
+            # 과금 기록 (서비스 내부에서 DLQ 처리)
             try:
                 sku = inv_repo.get_sku(sku_id)
                 cid = sku.get('client_id') if sku else None
@@ -60,7 +60,7 @@ def inbound():
                                        get_repo('client_rate'), cid,
                                        quantity=quantity, memo=memo)
             except Exception:
-                logger.exception('과금 기록 실패 (입고): sku_id=%s', sku_id)
+                logger.exception('과금 서비스 호출 자체 실패 (입고): sku_id=%s', sku_id)
         except Exception as e:
             flash(f'입고 오류: {e}', 'danger')
         return redirect(url_for('operator.inbound'))
@@ -155,6 +155,88 @@ def ledger():
                            filter_date_from=date_from, filter_date_to=date_to)
 
 
+@operator_bp.route('/inventory/export')
+@login_required
+@_require_operator
+def inventory_export():
+    """재고 현황 엑셀 다운로드."""
+    import io
+    from flask import send_file
+    from db_utils import get_repo
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        flash('openpyxl 미설치', 'danger')
+        return redirect(url_for('operator.inventory'))
+
+    inv_repo = get_repo('inventory')
+    skus = inv_repo.list_skus() or []
+    stocks = inv_repo.list_all_stock() or []
+    sku_stock = {}
+    for st in stocks:
+        sid = st.get('sku_id')
+        sku_stock[sid] = sku_stock.get(sid, 0) + st.get('quantity', 0)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '재고현황'
+    ws.append(['SKU코드', '바코드', '품명', '카테고리', '보관온도', '현재고', '최소재고'])
+    for s in skus:
+        ws.append([
+            s.get('sku_code', ''), s.get('barcode', ''), s.get('name', ''),
+            s.get('category', ''), s.get('storage_temp', 'ambient'),
+            sku_stock.get(s['id'], 0), s.get('min_stock_qty', 0),
+        ])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, download_name='재고현황.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@operator_bp.route('/ledger/export')
+@login_required
+@_require_operator
+def ledger_export():
+    """수불장 엑셀 다운로드."""
+    import io
+    from flask import send_file
+    from db_utils import get_repo
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        flash('openpyxl 미설치', 'danger')
+        return redirect(url_for('operator.ledger'))
+
+    repo = get_repo('inventory')
+    sku_id = request.args.get('sku_id', type=int)
+    movement_type = request.args.get('type')
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+    movements = repo.list_movements(sku_id=sku_id, movement_type=movement_type,
+                                    date_from=date_from, date_to=date_to)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '수불장'
+    ws.append(['일시', '유형', 'SKU ID', '수량', '로케이션', 'LOT', '메모'])
+    for m in movements:
+        ws.append([
+            m.get('created_at', '')[:19] if m.get('created_at') else '',
+            m.get('movement_type', ''),
+            m.get('sku_id', ''),
+            m.get('quantity', 0),
+            m.get('location_id', ''),
+            m.get('lot_number', ''),
+            m.get('memo', ''),
+        ])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, download_name='수불장.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
 # ═══ 상품마스터 (SKU) ═══
 
 @operator_bp.route('/skus')
@@ -217,6 +299,15 @@ def sku_bulk_upload():
     f = request.files.get('file')
     if not f or not f.filename.endswith(('.xlsx', '.xls')):
         flash('엑셀 파일(.xlsx)을 선택해주세요.', 'warning')
+        return redirect(url_for('operator.skus'))
+    # MIME 타입 검증
+    allowed_mimes = (
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel',
+        'application/octet-stream',  # 일부 브라우저
+    )
+    if f.content_type not in allowed_mimes:
+        flash('허용되지 않는 파일 형식입니다.', 'warning')
         return redirect(url_for('operator.skus'))
 
     client_id = request.form.get('client_id', type=int)

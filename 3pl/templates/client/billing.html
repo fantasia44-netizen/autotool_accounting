@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}과금내역 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>과금내역</span>{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0">과금내역</h4>
+    <div class="d-flex gap-2">
+        <input type="month" id="monthPicker" class="form-control form-control-sm" style="width:160px"
+               value="{{ current_month }}" onchange="location.href='?month='+this.value">
+        <a href="{{ url_for('client.billing_export', month=current_month) }}"
+           class="btn btn-sm btn-outline-success"><i class="bi bi-download me-1"></i>엑셀</a>
+    </div>
+</div>
+
+<!-- 월별 요약 -->
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-lg-3">
+        <div class="stat-card">
+            <div class="stat-label">{{ current_month }} 합계</div>
+            <div class="stat-value">{{ '{:,.0f}'.format(summary.total) }}</div>
+        </div>
+    </div>
+    {% for cat, amount in summary.by_category.items() %}
+    <div class="col-sm-6 col-lg-3">
+        <div class="stat-card">
+            <div class="stat-label">{{ category_labels.get(cat, cat) }}</div>
+            <div class="stat-value">{{ '{:,.0f}'.format(amount) }}</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- 상세 내역 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6>상세 내역 ({{ summary['items']|length }}건)</h6>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>일시</th><th>카테고리</th><th>항목</th><th class="text-end">수량</th><th class="text-end">단가</th><th class="text-end">금액</th><th>메모</th></tr>
+            </thead>
+            <tbody>
+                {% for r in summary['items'] %}
+                <tr>
+                    <td class="text-muted">{{ r.created_at[:16] if r.created_at else '-' }}</td>
+                    <td><span class="badge bg-secondary">{{ category_labels.get(r.category, r.category) }}</span></td>
+                    <td>{{ r.fee_name or '-' }}</td>
+                    <td class="text-end">{{ r.quantity }}</td>
+                    <td class="text-end">{{ '{:,.0f}'.format(r.unit_price|float) }}</td>
+                    <td class="text-end fw-semibold">{{ '{:,.0f}'.format(r.total_amount|float) }}</td>
+                    <td class="text-muted">{{ r.memo or '' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">해당 월 과금 내역이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+            {% if summary['items'] %}
+            <tfoot>
+                <tr class="table-light">
+                    <td colspan="5" class="text-end fw-bold">합계</td>
+                    <td class="text-end fw-bold">{{ '{:,.0f}'.format(summary.total) }}</td>
+                    <td></td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+
+<!-- 정산서 이력 -->
+{% if invoices %}
+<div class="data-card mt-4">
+    <div class="data-card-header"><h6>정산서 이력</h6></div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead><tr><th>월</th><th class="text-end">금액</th><th>상태</th><th>확정일</th></tr></thead>
+            <tbody>
+                {% for inv in invoices %}
+                <tr>
+                    <td>{{ inv.year_month }}</td>
+                    <td class="text-end">{{ '{:,.0f}'.format(inv.total_amount|float) }}</td>
+                    <td>
+                        {% if inv.status == 'draft' %}<span class="badge bg-secondary">임시</span>
+                        {% elif inv.status == 'confirmed' %}<span class="badge bg-primary">확정</span>
+                        {% elif inv.status == 'sent' %}<span class="badge bg-info">발송</span>
+                        {% elif inv.status == 'paid' %}<span class="badge bg-success">입금완료</span>
+                        {% else %}<span class="badge bg-light text-dark">{{ inv.status }}</span>{% endif %}
+                    </td>
+                    <td class="text-muted">{{ inv.confirmed_at[:10] if inv.confirmed_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
