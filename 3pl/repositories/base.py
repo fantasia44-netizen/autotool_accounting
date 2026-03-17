@@ -49,10 +49,12 @@ class BaseRepository:
     # ── 공통 CRUD 헬퍼 ──
 
     def _query(self, table, columns='*', filters=None, order_by=None,
-               order_desc=True, limit=None):
+               order_desc=True, limit=None, include_deleted=False):
         """범용 조회. filters: [(col, op, val), ...]"""
         q = self.client.table(table).select(columns)
         q = self._apply_tenant_filter(q)
+        if not include_deleted:
+            q = q.or_('is_deleted.is.null,is_deleted.eq.false')
         if filters:
             for col, op, val in filters:
                 if op == 'eq':
@@ -80,13 +82,35 @@ class BaseRepository:
         return res.data[0] if res.data else None
 
     def _update(self, table, record_id, payload):
-        """ID 기반 업데이트."""
-        res = self.client.table(table).update(payload).eq('id', record_id).execute()
+        """ID 기반 업데이트 (테넌트 필터 적용)."""
+        q = self.client.table(table).update(payload).eq('id', record_id)
+        q = self._apply_tenant_filter(q)
+        res = q.execute()
         return res.data[0] if res.data else None
 
     def _delete(self, table, record_id):
-        """ID 기반 삭제."""
-        self.client.table(table).delete().eq('id', record_id).execute()
+        """ID 기반 소프트 삭제 (is_deleted 컬럼 있으면 soft, 없으면 hard).
+
+        테넌트 필터 적용하여 타 운영사 데이터 삭제 방지.
+        """
+        from datetime import datetime, timezone
+        # soft delete 시도
+        try:
+            q = self.client.table(table).update({
+                'is_deleted': True,
+                'deleted_at': datetime.now(timezone.utc).isoformat(),
+            }).eq('id', record_id)
+            q = self._apply_tenant_filter(q)
+            res = q.execute()
+            if res.data:
+                return
+        except Exception:
+            pass  # is_deleted 컬럼 없으면 hard delete fallback
+
+        # hard delete (테넌트 필터 적용)
+        q = self.client.table(table).delete().eq('id', record_id)
+        q = self._apply_tenant_filter(q)
+        q.execute()
 
     def _upsert(self, table, payload, on_conflict='id'):
         """Upsert (insert or update)."""

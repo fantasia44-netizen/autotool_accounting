@@ -1,11 +1,20 @@
 """고객사/요금/마켓플레이스/과금정산/고객사 SKU 관련 라우트."""
 import logging
-from flask import render_template, request, redirect, url_for, flash
+from flask import render_template, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
 
 from . import operator_bp, _require_operator
 
 logger = logging.getLogger(__name__)
+
+
+def _verify_client_owner(client_id):
+    """client_id가 현재 operator 소속인지 검증. 아니면 404."""
+    from db_utils import get_repo
+    client = get_repo('client').get_client(client_id)
+    if not client:
+        abort(404)
+    return client
 
 
 # ═══ 고객사관리 ═══
@@ -66,6 +75,7 @@ def client_detail(client_id):
 @login_required
 @_require_operator
 def client_update(client_id):
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     repo = get_repo('client')
     data = {
@@ -88,6 +98,7 @@ def client_update(client_id):
 @login_required
 @_require_operator
 def client_rate_create(client_id):
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     rate_repo = get_repo('client_rate')
     count = rate_repo.count_rates(client_id)
@@ -118,6 +129,7 @@ def client_rate_create(client_id):
 @login_required
 @_require_operator
 def client_rate_update(client_id, rate_id):
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     rate_repo = get_repo('client_rate')
     data = {
@@ -137,6 +149,7 @@ def client_rate_update(client_id, rate_id):
 @login_required
 @_require_operator
 def client_rate_delete(client_id, rate_id):
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     rate_repo = get_repo('client_rate')
     rate_repo.delete_rate(rate_id)
@@ -151,6 +164,7 @@ def client_rate_delete(client_id, rate_id):
 @_require_operator
 def client_rate_preset(client_id):
     """프리셋 항목 일괄 추가."""
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     from services.client_billing_service import RATE_PRESETS
     rate_repo = get_repo('client_rate')
@@ -221,6 +235,7 @@ def client_billing(client_id):
 @_require_operator
 def client_billing_confirm(client_id):
     """정산서 확정."""
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     from datetime import datetime, timezone
     billing_repo = get_repo('client_billing')
@@ -255,6 +270,7 @@ def client_billing_confirm(client_id):
 @_require_operator
 def client_sku_create(client_id):
     """고객사 상품 등록."""
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     repo = get_repo('inventory')
     barcode = request.form.get('barcode', '').strip()
@@ -282,6 +298,7 @@ def client_sku_create(client_id):
 @_require_operator
 def client_sku_update(client_id, sku_id):
     """고객사 상품 수정."""
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     repo = get_repo('inventory')
     data = {
@@ -306,6 +323,7 @@ def client_sku_update(client_id, sku_id):
 @_require_operator
 def client_marketplace_create(client_id):
     """마켓플레이스 API 인증정보 등록."""
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     repo = get_repo('client_marketplace')
     channel = request.form.get('channel', '').strip()
@@ -342,6 +360,7 @@ def client_marketplace_create(client_id):
 @_require_operator
 def client_marketplace_update(client_id, cred_id):
     """마켓플레이스 API 인증정보 수정."""
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     repo = get_repo('client_marketplace')
     data = {
@@ -370,6 +389,7 @@ def client_marketplace_update(client_id, cred_id):
 @_require_operator
 def client_marketplace_delete(client_id, cred_id):
     """마켓플레이스 API 인증정보 삭제."""
+    _verify_client_owner(client_id)
     from db_utils import get_repo
     repo = get_repo('client_marketplace')
     repo.delete_credential(cred_id)
