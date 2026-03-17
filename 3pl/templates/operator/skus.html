@@ -131,7 +131,7 @@
     <div class="data-card-body">
         <table class="table table-compact mb-0">
             <thead>
-                <tr><th>SKU코드</th><th>바코드</th><th>상품명</th><th>카테고리</th><th>단위</th><th>보관</th><th>중량</th></tr>
+                <tr><th>SKU코드</th><th>바코드</th><th>상품명</th><th>고객사</th><th>카테고리</th><th>단위</th><th>보관</th><th>중량</th></tr>
             </thead>
             <tbody>
                 {% for s in skus %}
@@ -139,6 +139,7 @@
                     <td class="col-sticky"><code>{{ s.sku_code }}</code></td>
                     <td>{{ s.barcode or '-' }}</td>
                     <td class="fw-semibold">{{ s.name }}</td>
+                    <td style="font-size:0.8rem;">{{ client_map.get(s.client_id, '-') }}</td>
                     <td>{{ s.category or '-' }}</td>
                     <td>{{ s.unit }}</td>
                     <td>
@@ -149,7 +150,7 @@
                     <td>{{ s.weight_g or '-' }}g</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="7" class="text-center text-muted py-4">등록된 상품이 없습니다</td></tr>
+                <tr><td colspan="8" class="text-center text-muted py-4">등록된 상품이 없습니다</td></tr>
                 {% endfor %}
             </tbody>
         </table>

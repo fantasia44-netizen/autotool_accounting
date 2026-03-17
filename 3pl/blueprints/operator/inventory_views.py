@@ -43,12 +43,15 @@ def inbound():
         location_id = request.form.get('location_id', type=int)
         quantity = request.form.get('quantity', type=int)
         lot_number = request.form.get('lot_number', '').strip() or None
+        expiry_date = request.form.get('expiry_date', '').strip() or None
+        storage_temp = request.form.get('storage_temp', '').strip() or None
         memo = request.form.get('memo', '').strip()
 
         try:
             process_inbound(inv_repo, sku_id, location_id, quantity,
                             lot_number=lot_number, memo=memo,
-                            user_id=current_user.id)
+                            user_id=current_user.id,
+                            expiry_date=expiry_date)
             flash(f'{quantity}개 입고 완료', 'success')
             # 과금 기록 (서비스 내부에서 DLQ 처리)
             try:
@@ -68,11 +71,15 @@ def inbound():
     client_repo = get_repo('client')
     clients = client_repo.list_clients() or []
     skus = inv_repo.list_skus()
-    locations = wh_repo.list_all_locations()
+    locations = wh_repo.list_all_locations_with_path()
+    warehouses = wh_repo.list_warehouses()
     recent = inv_repo.list_movements(movement_type='inbound', limit=20)
     sku_map = {s['id']: f"{s['sku_code']} — {s['name']}" for s in skus}
+    # 로케이션 ID→표시명 맵 (최근입고에서 사용)
+    loc_map = {loc['id']: loc.get('display', loc.get('code', '?')) for loc in locations}
     return render_template('operator/inbound.html', skus=skus, locations=locations,
-                           recent_inbounds=recent, clients=clients, sku_map=sku_map)
+                           warehouses=warehouses, recent_inbounds=recent,
+                           clients=clients, sku_map=sku_map, loc_map=loc_map)
 
 
 # ═══ API ═══
@@ -129,10 +136,14 @@ def adjustment():
 
     wh_repo = get_repo('warehouse')
     skus = inv_repo.list_skus()
-    locations = wh_repo.list_all_locations()
+    locations = wh_repo.list_all_locations_with_path()
+    warehouses = wh_repo.list_warehouses()
     recent = inv_repo.list_movements(movement_type='adjust', limit=20)
+    loc_map = {loc['id']: loc.get('display', loc.get('code', '?')) for loc in locations}
+    sku_map = {s['id']: f"{s['sku_code']} — {s['name']}" for s in skus}
     return render_template('operator/adjustment.html', skus=skus, locations=locations,
-                           recent_adjustments=recent)
+                           warehouses=warehouses, recent_adjustments=recent,
+                           loc_map=loc_map, sku_map=sku_map)
 
 
 # ═══ 수불부 ═══
@@ -150,7 +161,12 @@ def ledger():
     movements = repo.list_movements(sku_id=sku_id, movement_type=movement_type,
                                     date_from=date_from, date_to=date_to)
     skus = repo.list_skus()
+    wh_repo = get_repo('warehouse')
+    locations = wh_repo.list_all_locations_with_path()
+    loc_map = {loc['id']: loc.get('display', loc.get('code', '?')) for loc in locations}
+    sku_map = {s['id']: f"{s['sku_code']} — {s['name']}" for s in skus}
     return render_template('operator/ledger.html', movements=movements, skus=skus,
+                           loc_map=loc_map, sku_map=sku_map,
                            filter_sku_id=sku_id, filter_type=movement_type,
                            filter_date_from=date_from, filter_date_to=date_to)
 
@@ -249,8 +265,10 @@ def skus():
     client_id = request.args.get('client_id', type=int)
     items = repo.list_skus(client_id=client_id, search=search)
     client_repo = get_repo('client')
-    clients = client_repo.list_clients()
+    clients = client_repo.list_clients() or []
+    client_map = {c['id']: c['name'] for c in clients}
     return render_template('operator/skus.html', skus=items, clients=clients,
+                           client_map=client_map,
                            filter_search=search, filter_client_id=client_id)
 
 

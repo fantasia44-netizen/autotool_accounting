@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}재고실사 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{{ url_for('packing.field_dashboard') }}">현장모드</a> &rsaquo; <span>재고실사</span>
+{% endblock %}
+
+{% block content %}
+<style>
+    .scan-input-lg {
+        font-size: 1.5rem; padding: 0.8rem 1rem; text-align: center;
+        border: 2px solid var(--border); border-radius: 10px;
+    }
+    .scan-input-lg:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(58,134,255,0.2); }
+    .field-error-banner {
+        position: fixed; top: 0; left: 0; right: 0;
+        background: #ef4444; color: #fff; text-align: center;
+        font-size: 1.1rem; font-weight: 600; padding: 0.8rem; z-index: 9999; display: none;
+    }
+    .field-error-banner.show { display: block; }
+    .stock-item {
+        border: 2px solid var(--border); border-radius: 12px; padding: 1rem; margin-bottom: 0.8rem;
+        transition: border-color 0.2s;
+    }
+    .stock-item.changed { border-color: #f59e0b; background: rgba(245,158,11,0.05); }
+    .stock-item .sku-name { font-size: 1.1rem; font-weight: 600; }
+    .stock-item .system-qty { font-size: 0.9rem; color: #666; }
+    .actual-input {
+        font-size: 1.5rem; font-weight: 700; text-align: center; width: 80px;
+        border: 2px solid var(--border); border-radius: 8px; padding: 0.3rem;
+    }
+    .actual-input:focus { border-color: var(--accent); }
+    .diff-badge {
+        font-size: 0.85rem; font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 6px;
+    }
+    .diff-plus { background: #dcfce7; color: #16a34a; }
+    .diff-minus { background: #fee2e2; color: #dc2626; }
+    .diff-zero { background: #f3f4f6; color: #6b7280; }
+    .result-card {
+        border-radius: 12px; padding: 1.2rem; margin-bottom: 0.8rem;
+        border: 2px solid var(--border);
+    }
+    .result-card.success { border-color: #22c55e; background: rgba(34,197,94,0.05); }
+</style>
+
+<div id="errorBanner" class="field-error-banner"></div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0"><i class="bi bi-clipboard-data me-2"></i>재고실사</h4>
+    <a href="{{ url_for('packing.field_dashboard') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>현장홈
+    </a>
+</div>
+
+<!-- Step 1: 로케이션 선택 -->
+<div class="data-card mb-3">
+    <div class="p-3">
+        <label class="form-label fw-semibold">로케이션 선택</label>
+        <select id="locationSelect" class="form-select" style="font-size:1.1rem;" onchange="loadStock()">
+            <option value="">로케이션 선택</option>
+            {% for loc in locations %}
+            <option value="{{ loc.id }}">{{ loc.display }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
+<!-- Step 2: 재고 목록 + 실수량 입력 -->
+<div id="stockArea" style="display:none;">
+    <div class="data-card mb-3">
+        <div class="data-card-header">
+            <h6 class="mb-0">재고 목록</h6>
+            <span id="itemCount" class="badge bg-info">0</span>
+        </div>
+        <div class="p-3">
+            <!-- 바코드로 빠른 추가 -->
+            <div class="mb-3">
+                <input type="text" id="addBarcodeInput" class="form-control scan-input-lg"
+                       placeholder="바코드 스캔으로 상품 추가...">
+                <small class="text-muted">시스템에 없는 상품도 바코드 스캔으로 추가 가능</small>
+            </div>
+            <div id="stockItems"></div>
+        </div>
+    </div>
+
+    <!-- 조정 실행 -->
+    <div class="data-card mb-3">
+        <div class="p-3">
+            <div id="diffSummary" class="mb-2 text-center" style="font-size:1.1rem;"></div>
+            <button id="submitBtn" class="btn btn-info btn-lg w-100" onclick="submitAdjustments()" disabled>
+                <i class="bi bi-clipboard-check me-1"></i>실사 반영
+            </button>
+        </div>
+    </div>
+</div>
+
+<div id="resultArea"></div>
+
+<script>
+let stockData = [];
+
+// 바코드로 상품 추가
+document.getElementById('addBarcodeInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        addByBarcode(this.value.trim());
+        this.value = '';
+    }
+});
+
+function loadStock() {
+    const locId = document.getElementById('locationSelect').value;
+    if (!locId) {
+        document.getElementById('stockArea').style.display = 'none';
+        return;
+    }
+
+    fetch('/packing/api/field/stock-at-location', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ location_id: locId })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.ok) { showError(data.error); return; }
+        stockData = data.items.map(item => ({
+            ...item,
+            actual_qty: item.system_qty  // 초기값은 시스템 수량
+        }));
+        renderStockItems();
+        document.getElementById('stockArea').style.display = 'block';
+        document.getElementById('itemCount').textContent = stockData.length;
+    })
+    .catch(() => showError('네트워크 오류'));
+}
+
+function addByBarcode(barcode) {
+    if (!barcode) return;
+    const locId = document.getElementById('locationSelect').value;
+
+    fetch('/packing/api/field/sku-lookup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ barcode, location_id: locId })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.ok) { playError(); showError(data.error); return; }
+
+        // 이미 목록에 있는지 확인
+        const existing = stockData.find(s => s.sku_id === data.sku_id);
+        if (existing) {
+            // 기존 항목의 actual_qty +1
+            existing.actual_qty = (existing.actual_qty || 0) + 1;
+            playSuccess();
+        } else {
+            // 신규 추가 (시스템 재고 0)
+            stockData.push({
+                sku_id: data.sku_id,
+                sku_code: data.sku_code,
+                sku_name: data.sku_name,
+                barcode: data.barcode,
+                system_qty: data.stock_qty || 0,
+                actual_qty: 1,
+            });
+            playSuccess();
+        }
+        renderStockItems();
+        updateDiffSummary();
+        document.getElementById('itemCount').textContent = stockData.length;
+    })
+    .catch(() => { playError(); showError('네트워크 오류'); });
+}
+
+function renderStockItems() {
+    const container = document.getElementById('stockItems');
+    container.innerHTML = stockData.map((item, idx) => {
+        const diff = (item.actual_qty || 0) - item.system_qty;
+        const changed = diff !== 0;
+        let diffHtml = '';
+        if (diff > 0) diffHtml = `<span class="diff-badge diff-plus">+${diff}</span>`;
+        else if (diff < 0) diffHtml = `<span class="diff-badge diff-minus">${diff}</span>`;
+        else diffHtml = `<span class="diff-badge diff-zero">±0</span>`;
+
+        return `<div class="stock-item ${changed ? 'changed' : ''}">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <div class="sku-name">${item.sku_name}</div>
+                    <div class="system-qty">시스템: ${item.system_qty}개 ${diffHtml}</div>
+                    <small class="text-muted">${item.sku_code} | ${item.barcode || '-'}</small>
+                </div>
+                <div>
+                    <input type="number" class="actual-input" value="${item.actual_qty}"
+                           min="0" onchange="updateActual(${idx}, this.value)">
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    updateDiffSummary();
+}
+
+function updateActual(idx, val) {
+    stockData[idx].actual_qty = parseInt(val) || 0;
+    renderStockItems();
+}
+
+function updateDiffSummary() {
+    const changes = stockData.filter(s => (s.actual_qty || 0) !== s.system_qty);
+    const summary = document.getElementById('diffSummary');
+    const btn = document.getElementById('submitBtn');
+
+    if (changes.length === 0) {
+        summary.innerHTML = '<span class="text-muted">차이 없음 — 모두 일치합니다.</span>';
+        btn.disabled = true;
+    } else {
+        const plus = changes.filter(c => c.actual_qty > c.system_qty).length;
+        const minus = changes.filter(c => c.actual_qty < c.system_qty).length;
+        summary.innerHTML = `<strong>${changes.length}건</strong> 차이 발견 (증가 ${plus}, 감소 ${minus})`;
+        btn.disabled = false;
+    }
+}
+
+function submitAdjustments() {
+    const locId = document.getElementById('locationSelect').value;
+    const adjustments = stockData
+        .filter(s => (s.actual_qty || 0) !== s.system_qty)
+        .map(s => ({
+            sku_id: s.sku_id,
+            system_qty: s.system_qty,
+            actual_qty: s.actual_qty,
+        }));
+
+    if (!adjustments.length) return;
+
+    document.getElementById('submitBtn').disabled = true;
+
+    fetch('/packing/api/field/stockcheck', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ location_id: locId, adjustments })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            playSuccess();
+            document.getElementById('resultArea').innerHTML =
+                `<div class="result-card success">
+                    <div class="text-center">
+                        <i class="bi bi-check-circle-fill text-success" style="font-size:2rem;"></i>
+                        <div style="font-size:1.2rem; font-weight:700; margin-top:0.5rem;">
+                            실사 완료 — ${data.adjusted_count}건 조정됨
+                        </div>
+                    </div>
+                </div>`;
+            // 재로드
+            loadStock();
+        } else {
+            playError();
+            showError(data.error);
+            document.getElementById('submitBtn').disabled = false;
+        }
+    })
+    .catch(() => {
+        playError(); showError('네트워크 오류');
+        document.getElementById('submitBtn').disabled = false;
+    });
+}
+
+function showError(msg) {
+    const b = document.getElementById('errorBanner');
+    b.textContent = msg; b.classList.add('show');
+    setTimeout(() => b.classList.remove('show'), 3000);
+}
+function playSuccess() {
+    try { const c=new AudioContext(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;o.type='sine';g.gain.value=0.15;o.start();o.stop(c.currentTime+0.12); } catch(e){}
+}
+function playError() {
+    try { const c=new AudioContext(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=300;o.type='square';g.gain.value=0.2;o.start();o.stop(c.currentTime+0.3); } catch(e){}
+}
+
+document.addEventListener('click', e => {
+    if (!e.target.closest('select, input, button, a')) document.getElementById('addBarcodeInput').focus();
+});
+</script>
+{% endblock %}

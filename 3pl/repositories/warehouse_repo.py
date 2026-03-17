@@ -29,7 +29,8 @@ class WarehouseRepository(BaseRepository):
     def list_zones(self, warehouse_id):
         return self._query(self.ZONE_TABLE,
                            filters=[('warehouse_id', 'eq', warehouse_id)],
-                           order_by='name', order_desc=False)
+                           order_by='name', order_desc=False,
+                           skip_tenant=True)
 
     def create_zone(self, data):
         return self._insert(self.ZONE_TABLE, data)
@@ -38,12 +39,63 @@ class WarehouseRepository(BaseRepository):
 
     def list_locations(self, zone_id):
         return self._query(self.LOCATION_TABLE,
-                           filters=[('zone_id', 'eq', zone_id)],
-                           order_by='code', order_desc=False)
+                           filters=[('zone_id', 'eq', zone_id),
+                                    ('is_active', 'eq', True)],
+                           order_by='code', order_desc=False,
+                           skip_tenant=True)
 
     def create_location(self, data):
         return self._insert(self.LOCATION_TABLE, data)
 
+    def update_location(self, location_id, data):
+        """로케이션 수정."""
+        return self.client.table(self.LOCATION_TABLE).update(
+            data).eq('id', location_id).execute()
+
     def list_all_locations(self):
-        """전체 로케이션 목록 (zone 무관)."""
-        return self.client.table(self.LOCATION_TABLE).select('*').execute().data or []
+        """전체 로케이션 목록 (zone 무관, 활성만)."""
+        return self.client.table(self.LOCATION_TABLE).select(
+            '*').eq('is_active', True).execute().data or []
+
+    def list_all_locations_with_path(self):
+        """전체 로케이션 + 창고/구역 이름 포함.
+
+        Returns: [{ id, code, zone_id, zone_name, warehouse_id, warehouse_name, storage_temp }, ...]
+        """
+        locations = self.list_all_locations()
+        if not locations:
+            return []
+
+        # zone 정보 일괄 조회
+        zone_ids = list({loc.get('zone_id') for loc in locations if loc.get('zone_id')})
+        zones = {}
+        if zone_ids:
+            rows = self.client.table(self.ZONE_TABLE).select('*').in_('id', zone_ids).execute().data or []
+            zones = {z['id']: z for z in rows}
+
+        # warehouse 정보 일괄 조회
+        wh_ids = list({z.get('warehouse_id') for z in zones.values() if z.get('warehouse_id')})
+        warehouses = {}
+        if wh_ids:
+            rows = self.client.table(self.TABLE).select('*').in_('id', wh_ids).execute().data or []
+            warehouses = {w['id']: w for w in rows}
+
+        result = []
+        for loc in locations:
+            zone = zones.get(loc.get('zone_id'), {})
+            wh = warehouses.get(zone.get('warehouse_id'), {})
+            result.append({
+                **loc,
+                'zone_name': zone.get('name', ''),
+                'storage_temp': zone.get('storage_temp', 'ambient'),
+                'warehouse_id': zone.get('warehouse_id'),
+                'warehouse_name': wh.get('name', ''),
+                'display': f"{wh.get('name', '?')} > {zone.get('name', '?')} > {loc.get('code', '?')}",
+            })
+        return result
+
+    def get_location(self, location_id):
+        """로케이션 단건 조회."""
+        rows = self.client.table(self.LOCATION_TABLE).select(
+            '*').eq('id', location_id).execute().data or []
+        return rows[0] if rows else None

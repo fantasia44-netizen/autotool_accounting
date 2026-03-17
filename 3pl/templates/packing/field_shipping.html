@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}출고상차 스캔 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{{ url_for('packing.field_dashboard') }}">현장모드</a> &rsaquo; <span>출고상차</span>
+{% endblock %}
+
+{% block content %}
+<style>
+    .scan-input-lg {
+        font-size: 1.8rem; padding: 1rem 1.2rem; text-align: center;
+        border: 2px solid var(--border); border-radius: 10px;
+        font-family: 'Pretendard', monospace; letter-spacing: 1px;
+    }
+    .scan-input-lg:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(58,134,255,0.2); }
+    .field-error-banner {
+        position: fixed; top: 0; left: 0; right: 0;
+        background: #ef4444; color: #fff; text-align: center;
+        font-size: 1.1rem; font-weight: 600; padding: 0.8rem; z-index: 9999; display: none;
+    }
+    .field-error-banner.show { display: block; }
+    .shipped-item {
+        padding: 0.7rem; border-bottom: 1px solid var(--border);
+        animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .shipped-item .order-no { font-weight: 700; font-size: 1rem; }
+    .shipped-item .detail { font-size: 0.8rem; color: #666; }
+    .counter-display {
+        font-size: 4rem; font-weight: 800; text-align: center;
+        font-variant-numeric: tabular-nums; color: var(--accent);
+        line-height: 1;
+    }
+    .counter-label {
+        text-align: center; font-size: 0.9rem; color: #666; font-weight: 500;
+    }
+    .flash-success {
+        animation: flashGreen 0.5s ease;
+    }
+    @keyframes flashGreen {
+        0%, 100% { background: transparent; }
+        50% { background: rgba(34, 197, 94, 0.15); }
+    }
+    .last-scan {
+        text-align: center; padding: 0.8rem; border-radius: 10px;
+        background: rgba(34, 197, 94, 0.08); border: 1px solid #22c55e;
+        display: none;
+    }
+    .last-scan.show { display: block; }
+    .last-scan .name { font-size: 1.2rem; font-weight: 700; color: #16a34a; }
+</style>
+
+<div id="errorBanner" class="field-error-banner"></div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0"><i class="bi bi-truck me-2"></i>출고상차</h4>
+    <a href="{{ url_for('packing.field_dashboard') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>현장홈
+    </a>
+</div>
+
+<!-- 카운터 -->
+<div class="data-card mb-3">
+    <div class="p-3">
+        <div class="counter-display" id="shippedCount">0</div>
+        <div class="counter-label">상차 완료</div>
+    </div>
+</div>
+
+<!-- 송장 스캔 -->
+<div class="data-card mb-3">
+    <div class="p-3">
+        <label class="form-label fw-semibold">송장번호 스캔</label>
+        <input type="text" id="invoiceInput" class="form-control scan-input-lg"
+               placeholder="송장 바코드 스캔..." autofocus>
+        <small class="text-muted d-block text-center mt-1">연속 스캔 모드 — 스캔 즉시 상차 처리</small>
+    </div>
+</div>
+
+<!-- 마지막 스캔 결과 -->
+<div id="lastScan" class="last-scan mb-3">
+    <div class="name" id="lastScanName">-</div>
+    <div class="text-muted" style="font-size:0.85rem;" id="lastScanDetail">-</div>
+</div>
+
+<!-- 상차 이력 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6 class="mb-0">상차 이력</h6>
+        <button class="btn btn-sm btn-outline-secondary" onclick="clearHistory()">초기화</button>
+    </div>
+    <div id="historyArea" class="p-3" style="max-height:400px; overflow-y:auto;">
+        <div class="text-center text-muted py-3">아직 상차 내역이 없습니다</div>
+    </div>
+</div>
+
+<script>
+let shippedList = [];
+
+// 송장 스캔 → 즉시 처리
+document.getElementById('invoiceInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        const barcode = this.value.trim();
+        if (barcode) {
+            processScan(barcode);
+            this.value = '';
+        }
+    }
+});
+
+function processScan(barcode) {
+    fetch('/packing/api/field/shipping-scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ barcode })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            playSuccess();
+            const now = new Date();
+            const time = now.getHours().toString().padStart(2,'0') + ':' +
+                         now.getMinutes().toString().padStart(2,'0');
+
+            shippedList.unshift({
+                order_no: data.order_no,
+                recipient: data.recipient,
+                channel: data.channel,
+                courier: data.courier,
+                barcode: barcode,
+                time: time,
+            });
+
+            // 카운터 업데이트
+            document.getElementById('shippedCount').textContent = shippedList.length;
+
+            // 마지막 스캔 표시
+            const lastScan = document.getElementById('lastScan');
+            document.getElementById('lastScanName').textContent =
+                `${data.order_no} — ${data.recipient || ''}`;
+            document.getElementById('lastScanDetail').textContent =
+                `${data.channel || ''} · ${data.courier || ''} · ${barcode}`;
+            lastScan.classList.add('show');
+
+            // 플래시 효과
+            document.getElementById('shippedCount').classList.remove('flash-success');
+            void document.getElementById('shippedCount').offsetWidth;
+            document.getElementById('shippedCount').classList.add('flash-success');
+
+            renderHistory();
+        } else {
+            playError();
+            showError(data.error);
+        }
+        document.getElementById('invoiceInput').focus();
+    })
+    .catch(() => {
+        playError();
+        showError('네트워크 오류');
+        document.getElementById('invoiceInput').focus();
+    });
+}
+
+function renderHistory() {
+    const area = document.getElementById('historyArea');
+    area.innerHTML = shippedList.map(h =>
+        `<div class="shipped-item">
+            <div class="d-flex justify-content-between">
+                <div>
+                    <div class="order-no">${h.order_no}</div>
+                    <div class="detail">${h.recipient || ''} · ${h.channel || ''} · ${h.courier || ''}</div>
+                </div>
+                <div class="text-end">
+                    <small class="text-muted">${h.time}</small>
+                    <div><i class="bi bi-check-circle-fill text-success"></i></div>
+                </div>
+            </div>
+        </div>`
+    ).join('');
+}
+
+function clearHistory() {
+    if (!confirm('상차 이력을 초기화하시겠습니까?')) return;
+    shippedList = [];
+    document.getElementById('shippedCount').textContent = '0';
+    document.getElementById('lastScan').classList.remove('show');
+    document.getElementById('historyArea').innerHTML =
+        '<div class="text-center text-muted py-3">아직 상차 내역이 없습니다</div>';
+}
+
+function showError(msg) {
+    const b = document.getElementById('errorBanner');
+    b.textContent = msg; b.classList.add('show');
+    setTimeout(() => b.classList.remove('show'), 3000);
+}
+function playSuccess() {
+    try { const c=new AudioContext(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;o.type='sine';g.gain.value=0.15;o.start();o.stop(c.currentTime+0.12); } catch(e){}
+}
+function playError() {
+    try { const c=new AudioContext(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=300;o.type='square';g.gain.value=0.2;o.start();o.stop(c.currentTime+0.3); } catch(e){}
+}
+
+// 자동 포커스
+document.addEventListener('click', e => {
+    if (!e.target.closest('input, button, a')) document.getElementById('invoiceInput').focus();
+});
+document.addEventListener('DOMContentLoaded', () => document.getElementById('invoiceInput').focus());
+</script>
+{% endblock %}

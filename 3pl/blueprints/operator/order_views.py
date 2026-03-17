@@ -83,9 +83,19 @@ def order_status_update(order_id):
             cid = order.get('client_id')
             if cid:
                 from services.client_billing_service import record_outbound_fee
+                # 주문 아이템 수 / 총 중량 계산 → 조건부 과금
+                order_full = repo.get_order_with_items(order_id)
+                items = order_full.get('items', []) if order_full else []
+                item_count = len(items)
+                total_weight_g = sum(
+                    (it.get('weight_g', 0) or 0) * abs(it.get('quantity', it.get('qty', 1)))
+                    for it in items
+                )
                 record_outbound_fee(get_repo('client_billing'),
                                     get_repo('client_rate'), cid,
-                                    order_id=order_id)
+                                    order_id=order_id,
+                                    item_count=item_count,
+                                    total_weight_g=total_weight_g)
         except Exception:
             logger.exception('과금 서비스 호출 자체 실패 (출고): order_id=%s', order_id)
     flash(f'주문 상태가 "{new_status}"로 변경되었습니다.', 'success')
@@ -230,36 +240,69 @@ def picking_complete(list_id):
     return redirect(url_for('operator.picking_detail', list_id=list_id))
 
 
-# ═══ 출고관리 ═══
+# ═══ 택배출고 ═══
 
 @operator_bp.route('/shipments')
 @login_required
 @_require_operator
 def shipments():
+    """택배출고 목록."""
     from db_utils import get_repo
     repo = get_repo('order')
     status = request.args.get('status')
-    shipment_type = request.args.get('type', 'normal')
-    items = repo.list_shipments(status=status, shipment_type=shipment_type)
+    items = repo.list_shipments(status=status, shipment_type='normal')
     counts = repo.count_shipments_by_status()
+    client_repo = get_repo('client')
+    clients = client_repo.list_clients() or []
+    client_map = {c['id']: c['name'] for c in clients}
+
+    # order_id → client_id 매핑 (1회 bulk 조회)
+    order_ids = list({s['order_id'] for s in items if s.get('order_id')})
+    if order_ids:
+        order_rows = repo._query(repo.ORDER_TABLE,
+                                  columns='id,client_id,order_no',
+                                  filters=[('id', 'in', order_ids)],
+                                  limit=len(order_ids))
+        order_client = {o['id']: o.get('client_id') for o in order_rows}
+        for s in items:
+            if s.get('order_id') and not s.get('client_id'):
+                s['client_id'] = order_client.get(s['order_id'])
+
+    return render_template('operator/shipments.html', shipments=items, counts=counts,
+                           filter_status=status, client_map=client_map)
+
+
+# ═══ 반품관리 (고객 회송) ═══
+
+@operator_bp.route('/returns')
+@login_required
+@_require_operator
+def returns():
+    """반품관리 목록."""
+    from db_utils import get_repo
+    repo = get_repo('order')
+    status = request.args.get('status')
+    items = repo.list_shipments(status=status, shipment_type='return')
     client_repo = get_repo('client')
     clients = client_repo.list_clients() or []
     client_map = {c['id']: c['name'] for c in clients}
     wh_repo = get_repo('warehouse')
     warehouses = wh_repo.list_warehouses() or []
+    locations = wh_repo.list_all_locations_with_path()
     inv_repo = get_repo('inventory')
     skus = inv_repo.list_skus() or []
-    return render_template('operator/shipments.html', shipments=items, counts=counts,
-                           filter_status=status, filter_type=shipment_type,
+    sku_map = {s['id']: f"{s['sku_code']} — {s['name']}" for s in skus}
+    return render_template('operator/returns.html', shipments=items,
                            clients=clients, client_map=client_map,
-                           warehouses=warehouses, skus=skus)
+                           warehouses=warehouses, locations=locations,
+                           skus=skus, sku_map=sku_map, filter_status=status)
 
 
-@operator_bp.route('/shipments/return', methods=['POST'])
+@operator_bp.route('/returns/create', methods=['POST'])
 @login_required
 @_require_operator
-def shipment_return_create():
-    """반품출고 생성."""
+def return_create():
+    """반품 등록 (고객 회송)."""
     from db_utils import get_repo
     repo = get_repo('order')
     inv_repo = get_repo('inventory')
@@ -271,7 +314,7 @@ def shipment_return_create():
 
     if not all([client_id, sku_id, quantity]):
         flash('필수 항목을 입력해주세요.', 'warning')
-        return redirect(url_for('operator.shipments', type='return'))
+        return redirect(url_for('operator.returns'))
 
     repo.create_shipment({
         'shipment_type': 'return',
@@ -279,12 +322,14 @@ def shipment_return_create():
         'sku_id': sku_id,
         'quantity': quantity,
         'reason': reason,
+        'location_id': location_id,
         'status': 'pending',
     })
 
     # 재고 복원: movement 기록 + stock 수량 증가
     inv_repo.log_movement({
         'sku_id': sku_id,
+        'location_id': location_id,
         'movement_type': 'return_in',
         'quantity': quantity,
         'memo': f'반품입고: {reason}' if reason else '반품입고',
@@ -296,66 +341,106 @@ def shipment_return_create():
         except Exception:
             logger.exception('반품 재고 수량 반영 실패: sku_id=%s, location_id=%s', sku_id, location_id)
 
-    # 반품비 과금 (서비스 내부에서 DLQ 처리)
+    # 반품비 과금
     try:
         from services.client_billing_service import record_return_fee
         record_return_fee(get_repo('client_billing'),
-                          get_repo('client_rate'), client_id, memo=reason)
+                          get_repo('client_rate'), client_id,
+                          quantity=quantity, memo=reason)
     except Exception:
         logger.exception('과금 서비스 호출 자체 실패 (반품): client_id=%s', client_id)
-    flash(f'반품출고 등록 완료 ({quantity}개)', 'success')
-    return redirect(url_for('operator.shipments', type='return'))
+    flash(f'반품 등록 완료 ({quantity}개)', 'success')
+    return redirect(url_for('operator.returns'))
 
 
-@operator_bp.route('/shipments/transfer', methods=['POST'])
+# ═══ 창고이동 ═══
+
+@operator_bp.route('/transfers')
 @login_required
 @_require_operator
-def shipment_transfer_create():
+def transfers():
+    """창고이동 목록."""
+    from db_utils import get_repo
+    repo = get_repo('order')
+    status = request.args.get('status')
+    items = repo.list_shipments(status=status, shipment_type='transfer')
+    wh_repo = get_repo('warehouse')
+    warehouses = wh_repo.list_warehouses() or []
+    locations = wh_repo.list_all_locations_with_path()
+    inv_repo = get_repo('inventory')
+    skus = inv_repo.list_skus() or []
+    sku_map = {s['id']: f"{s['sku_code']} — {s['name']}" for s in skus}
+    wh_map = {w['id']: w['name'] for w in warehouses}
+    return render_template('operator/transfers.html', shipments=items,
+                           warehouses=warehouses, locations=locations,
+                           skus=skus, sku_map=sku_map, wh_map=wh_map,
+                           filter_status=status)
+
+
+@operator_bp.route('/transfers/create', methods=['POST'])
+@login_required
+@_require_operator
+def transfer_create():
     """창고이동 생성."""
     from db_utils import get_repo
     repo = get_repo('order')
     inv_repo = get_repo('inventory')
     sku_id = request.form.get('sku_id', type=int)
     quantity = request.form.get('quantity', type=int)
-    from_wh = request.form.get('from_warehouse_id', type=int)
-    to_wh = request.form.get('to_warehouse_id', type=int)
+    from_loc = request.form.get('from_location_id', type=int)
+    to_loc = request.form.get('to_location_id', type=int)
     reason = request.form.get('reason', '').strip()
 
-    if not all([sku_id, quantity, from_wh, to_wh]):
+    if not all([sku_id, quantity]):
         flash('필수 항목을 입력해주세요.', 'warning')
-        return redirect(url_for('operator.shipments', type='transfer'))
+        return redirect(url_for('operator.transfers'))
 
-    if from_wh == to_wh:
-        flash('출발 창고와 도착 창고가 같습니다.', 'warning')
-        return redirect(url_for('operator.shipments', type='transfer'))
+    if from_loc and to_loc and from_loc == to_loc:
+        flash('출발 로케이션과 도착 로케이션이 같습니다.', 'warning')
+        return redirect(url_for('operator.transfers'))
 
     repo.create_shipment({
         'shipment_type': 'transfer',
         'sku_id': sku_id,
         'quantity': quantity,
-        'from_warehouse_id': from_wh,
-        'to_warehouse_id': to_wh,
+        'from_warehouse_id': from_loc,
+        'to_warehouse_id': to_loc,
         'reason': reason or '창고이동',
-        'status': 'pending',
+        'status': 'completed',
     })
 
-    inv_repo.log_movement({
-        'sku_id': sku_id,
-        'movement_type': 'transfer_out',
-        'quantity': -quantity,
-        'memo': '창고이동 (출발)',
-        'user_id': current_user.id,
-    })
-    inv_repo.log_movement({
-        'sku_id': sku_id,
-        'movement_type': 'transfer_in',
-        'quantity': quantity,
-        'memo': '창고이동 (도착)',
-        'user_id': current_user.id,
-    })
+    # 출발 로케이션 재고 차감
+    if from_loc:
+        inv_repo.log_movement({
+            'sku_id': sku_id,
+            'location_id': from_loc,
+            'movement_type': 'transfer_out',
+            'quantity': -quantity,
+            'memo': f'이동출고: {reason}' if reason else '이동출고',
+            'user_id': current_user.id,
+        })
+        try:
+            inv_repo.adjust_stock(sku_id, from_loc, delta=-quantity)
+        except Exception:
+            logger.exception('이동 출고 재고 반영 실패')
 
-    flash(f'창고이동 등록 완료 ({quantity}개)', 'success')
-    return redirect(url_for('operator.shipments', type='transfer'))
+    # 도착 로케이션 재고 증가
+    if to_loc:
+        inv_repo.log_movement({
+            'sku_id': sku_id,
+            'location_id': to_loc,
+            'movement_type': 'transfer_in',
+            'quantity': quantity,
+            'memo': f'이동입고: {reason}' if reason else '이동입고',
+            'user_id': current_user.id,
+        })
+        try:
+            inv_repo.adjust_stock(sku_id, to_loc, delta=quantity)
+        except Exception:
+            logger.exception('이동 입고 재고 반영 실패')
+
+    flash(f'창고이동 완료 ({quantity}개)', 'success')
+    return redirect(url_for('operator.transfers'))
 
 
 # ═══ 패킹센터 (운영사 뷰) ═══

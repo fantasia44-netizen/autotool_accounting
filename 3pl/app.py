@@ -95,6 +95,8 @@ def _init_repositories(app):
     from repositories.picking_repo import PickingRepository
     from repositories.client_marketplace_repo import ClientMarketplaceRepository
     from repositories.client_billing_repo import ClientBillingRepository
+    from repositories.audit_repo import AuditRepository
+    from repositories.finance_repo import FinanceRepository
 
     app.repos = {
         'warehouse': WarehouseRepository,
@@ -108,6 +110,8 @@ def _init_repositories(app):
         'picking': PickingRepository,
         'client_marketplace': ClientMarketplaceRepository,
         'client_billing': ClientBillingRepository,
+        'audit': AuditRepository,
+        'finance': FinanceRepository,
     }
 
 

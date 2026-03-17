@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}경영분석 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<span>경영분석</span>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0"><i class="bi bi-graph-up me-2"></i>경영분석</h4>
+    <form class="d-flex gap-2" method="get">
+        <input type="month" name="month" class="form-control form-control-sm" value="{{ year_month }}" style="width:160px;">
+        <button class="btn btn-sm btn-primary">조회</button>
+    </form>
+</div>
+
+<!-- P&L 요약 카드 -->
+<div class="row g-3 mb-3">
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-label">매출</div>
+            <div class="stat-value" style="color:var(--primary);">{{ "{:,.0f}".format(pnl.revenue|float if pnl else 0) }}원</div>
+            <div class="text-muted" style="font-size:0.75rem;">고객사 과금 합계</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-label">원가</div>
+            <div class="stat-value" style="color:#e74c3c;">{{ "{:,.0f}".format(pnl.cost_of_service|float if pnl else 0) }}원</div>
+            <div class="text-muted" style="font-size:0.75rem;">인건비+부자재+배송</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-label">판관비</div>
+            <div class="stat-value" style="color:#e67e22;">{{ "{:,.0f}".format(pnl.operating_expense|float if pnl else 0) }}원</div>
+            <div class="text-muted" style="font-size:0.75rem;">임대료+공과금+기타</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-label">순이익</div>
+            {% set ni = pnl.net_income|float if pnl else 0 %}
+            <div class="stat-value" style="color:{{ '#27ae60' if ni >= 0 else '#e74c3c' }};">{{ "{:,.0f}".format(ni) }}원</div>
+            {% if pnl and pnl.revenue|float > 0 %}
+            <div class="text-muted" style="font-size:0.75rem;">마진율 {{ "{:.1f}".format(ni / pnl.revenue|float * 100) }}%</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- 액션 버튼 -->
+<div class="d-flex gap-2 mb-3 flex-wrap">
+    <form method="post" action="{{ url_for('operator.finance_recalc') }}">
+        <input type="hidden" name="year_month" value="{{ year_month }}">
+        <button class="btn btn-sm btn-outline-primary" onclick="return confirm('{{ year_month }} P&L을 재계산합니까?')">
+            <i class="bi bi-calculator me-1"></i>P&L 재계산
+        </button>
+    </form>
+    <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#expenseModal">
+        <i class="bi bi-plus-circle me-1"></i>비용 등록
+    </button>
+</div>
+
+<!-- P&L 추이 (최근 6개월) -->
+{% if trend %}
+<div class="data-card mb-3">
+    <div class="data-card-header">
+        <h6 class="mb-0">월별 추이</h6>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    <th>월</th>
+                    <th class="text-end">매출</th>
+                    <th class="text-end">원가</th>
+                    <th class="text-end">판관비</th>
+                    <th class="text-end">순이익</th>
+                    <th class="text-end">마진율</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in trend %}
+                <tr>
+                    <td class="fw-semibold">{{ t.year_month }}</td>
+                    <td class="text-end" style="font-family:monospace;">{{ "{:,.0f}".format(t.revenue|float) }}</td>
+                    <td class="text-end" style="font-family:monospace; color:#e74c3c;">{{ "{:,.0f}".format(t.cost_of_service|float) }}</td>
+                    <td class="text-end" style="font-family:monospace; color:#e67e22;">{{ "{:,.0f}".format(t.operating_expense|float) }}</td>
+                    {% set ni = t.net_income|float %}
+                    <td class="text-end fw-semibold" style="font-family:monospace; color:{{ '#27ae60' if ni >= 0 else '#e74c3c' }};">{{ "{:,.0f}".format(ni) }}</td>
+                    <td class="text-end" style="font-size:0.8rem;">
+                        {% if t.revenue|float > 0 %}{{ "{:.1f}".format(ni / t.revenue|float * 100) }}%{% else %}-{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- 비용 상세 내역 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6 class="mb-0">{{ year_month }} 비용 내역</h6>
+        <span class="text-muted" style="font-size:0.8rem;">
+            {{ expenses|length }}건 | 합계 {{ "{:,.0f}".format(expense_summary.total) }}원
+        </span>
+    </div>
+    <div class="data-card-body">
+        <!-- 카테고리별 소계 -->
+        {% if expense_summary.by_category %}
+        <div class="d-flex gap-3 mb-3 flex-wrap">
+            {% for cat_key, cat_amt in expense_summary.by_category.items() %}
+            <div class="px-3 py-1 rounded" style="background:var(--bg-secondary); font-size:0.8rem;">
+                <span class="text-muted">{{ expense_categories.get(cat_key, cat_key) }}</span>
+                <span class="fw-semibold ms-1">{{ "{:,.0f}".format(cat_amt) }}원</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    <th>카테고리</th>
+                    <th>제목</th>
+                    <th>거래처</th>
+                    <th class="text-end">금액</th>
+                    <th class="text-end">세액</th>
+                    <th>일자</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for exp in expenses %}
+                <tr>
+                    <td>
+                        <span class="status-badge status-neutral" style="font-size:0.7rem;">
+                            {{ expense_categories.get(exp.category, exp.category) }}
+                        </span>
+                    </td>
+                    <td class="fw-semibold">{{ exp.title }}</td>
+                    <td style="font-size:0.8rem;">{{ exp.vendor_name or '-' }}</td>
+                    <td class="text-end fw-semibold" style="font-family:monospace;">{{ "{:,.0f}".format(exp.amount|float) }}원</td>
+                    <td class="text-end text-muted" style="font-family:monospace; font-size:0.8rem;">{{ "{:,.0f}".format(exp.tax_amount|float) }}</td>
+                    <td style="font-size:0.8rem;">{{ exp.expense_date }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('operator.finance_expense_delete', expense_id=exp.id) }}" class="d-inline">
+                            <button class="btn btn-sm btn-outline-danger py-0 px-1" style="font-size:0.7rem;"
+                                    onclick="return confirm('삭제하시겠습니까?')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">등록된 비용이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 비용 등록 모달 -->
+<div class="modal fade" id="expenseModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('operator.finance_expense_create') }}">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title">비용 등록</h6>
+                    <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <label class="form-label">카테고리</label>
+                            <select name="category" class="form-select form-select-sm" required>
+                                {% for key, label in expense_categories.items() %}
+                                <option value="{{ key }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">일자</label>
+                            <input type="date" name="expense_date" class="form-control form-control-sm" value="{{ today_kst() }}" required>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">제목</label>
+                            <input type="text" name="title" class="form-control form-control-sm" required placeholder="예: 3월 창고 임대료">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">금액 (공급가)</label>
+                            <input type="number" name="amount" class="form-control form-control-sm" required min="0" step="1" placeholder="0">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">세액 (VAT)</label>
+                            <input type="number" name="tax_amount" class="form-control form-control-sm" min="0" step="1" value="0" placeholder="0">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">거래처</label>
+                            <input type="text" name="vendor_name" class="form-control form-control-sm" placeholder="선택사항">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">사업자번호</label>
+                            <input type="text" name="vendor_biz_no" class="form-control form-control-sm" placeholder="000-00-00000">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">설명</label>
+                            <input type="text" name="description" class="form-control form-control-sm" placeholder="선택사항">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer py-2">
+                    <button type="submit" class="btn btn-sm btn-primary">등록</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

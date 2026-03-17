@@ -378,6 +378,24 @@ def api_complete_job():
         except Exception:
             pass  # 예약 없는 경우 무시
 
+    # ── 부자재비 과금 ──
+    materials_raw = request.form.get('materials', '')
+    if materials_raw:
+        try:
+            materials = json.loads(materials_raw)
+            if materials and order_id:
+                order_repo = get_repo('order')
+                order = order_repo.get_order(order_id)
+                client_id = order.get('client_id') if order else None
+                if client_id:
+                    from services.client_billing_service import record_packing_fee
+                    record_packing_fee(
+                        get_repo('client_billing'), get_repo('client_rate'),
+                        client_id, order_id=order_id, materials=materials)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('부자재비 과금 실패: job_id=%s', job_id)
+
     return jsonify({'ok': True})
 
 
@@ -434,6 +452,22 @@ def api_complete_job_no_video():
             commit_stock(inv_repo, order_id)
         except Exception:
             pass  # 예약 없는 경우 무시
+
+    # ── 부자재비 과금 ──
+    materials = data.get('materials')
+    if materials and order_id:
+        try:
+            order_repo = get_repo('order')
+            order = order_repo.get_order(order_id)
+            client_id = order.get('client_id') if order else None
+            if client_id:
+                from services.client_billing_service import record_packing_fee
+                record_packing_fee(
+                    get_repo('client_billing'), get_repo('client_rate'),
+                    client_id, order_id=order_id, materials=materials)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('부자재비 과금 실패: job_id=%s', job_id)
 
     return jsonify({'ok': True})
 
@@ -515,3 +549,361 @@ def api_video_url(job_id):
         return jsonify({'ok': False, 'error': '서명 URL 생성 실패'})
 
     return jsonify({'ok': True, 'url': url})
+
+
+# ═══════════════════════════════════════════════════════════
+# 현장모드 (Field Mode) — 입고스캔, 창고이동, 재고실사, 상차스캔
+# ═══════════════════════════════════════════════════════════
+
+@packing_bp.route('/field')
+@login_required
+@_require_packing
+def field_dashboard():
+    """현장모드 대시보드 — 오늘의 작업 현황."""
+    from db_utils import get_repo
+    inv_repo = get_repo('inventory')
+
+    # 오늘 날짜 (KST)
+    from services.tz_utils import now_kst
+    today = now_kst().strftime('%Y-%m-%d')
+
+    # 오늘 이동 이력 요약
+    movements = inv_repo.list_movements(date_from=today + 'T00:00:00',
+                                         limit=50) or []
+    inbound_cnt = sum(1 for m in movements if m.get('movement_type') == 'inbound')
+    outbound_cnt = sum(1 for m in movements if m.get('movement_type') == 'outbound')
+    transfer_cnt = sum(1 for m in movements if m.get('movement_type') in ('transfer_in', 'transfer_out'))
+    adjust_cnt = sum(1 for m in movements if m.get('movement_type') == 'adjust')
+
+    return render_template('packing/field_dashboard.html',
+                           today=today,
+                           inbound_cnt=inbound_cnt,
+                           outbound_cnt=outbound_cnt,
+                           transfer_cnt=transfer_cnt // 2,  # in+out 쌍
+                           adjust_cnt=adjust_cnt,
+                           recent_movements=movements[:20])
+
+
+@packing_bp.route('/field/inbound')
+@login_required
+@_require_packing
+def field_inbound():
+    """현장 입고 스캔 모드."""
+    from db_utils import get_repo
+    wh_repo = get_repo('warehouse')
+    locations = wh_repo.list_all_locations_with_path()
+    return render_template('packing/field_inbound.html', locations=locations)
+
+
+@packing_bp.route('/api/field/inbound', methods=['POST'])
+@login_required
+@_require_packing
+def api_field_inbound():
+    """현장 입고 API — 바코드 스캔 후 입고 처리."""
+    data = request.get_json(silent=True) or {}
+    barcode = data.get('barcode', '').strip()
+    location_id = data.get('location_id')
+    quantity = data.get('quantity', 1)
+    lot_number = data.get('lot_number', '').strip() or None
+
+    if not barcode:
+        return jsonify({'ok': False, 'error': '바코드를 입력해주세요.'})
+    if not location_id:
+        return jsonify({'ok': False, 'error': '로케이션을 선택해주세요.'})
+    if not quantity or quantity < 1:
+        return jsonify({'ok': False, 'error': '수량은 1 이상이어야 합니다.'})
+
+    from db_utils import get_repo
+    inv_repo = get_repo('inventory')
+
+    # SKU 조회
+    sku = inv_repo.get_sku_by_barcode(barcode)
+    if not sku:
+        sku = inv_repo.get_sku_by_code(barcode)
+    if not sku:
+        return jsonify({'ok': False, 'error': f'미등록 바코드: {barcode}',
+                        'error_type': 'not_found'})
+
+    # 입고 처리
+    from services.warehouse_service import process_inbound
+    try:
+        process_inbound(inv_repo, sku['id'], int(location_id), int(quantity),
+                        lot_number=lot_number,
+                        memo=f'현장스캔 입고',
+                        user_id=current_user.id)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'입고 처리 실패: {e}'})
+
+    # 현재 재고 조회
+    stock = inv_repo.get_stock(sku['id'], int(location_id), lot_number)
+    current_qty = stock['quantity'] if stock else quantity
+
+    return jsonify({
+        'ok': True,
+        'sku_name': sku.get('name', ''),
+        'sku_code': sku.get('sku_code', ''),
+        'quantity': quantity,
+        'current_stock': current_qty,
+    })
+
+
+@packing_bp.route('/field/transfer')
+@login_required
+@_require_packing
+def field_transfer():
+    """현장 창고이동 스캔 모드."""
+    from db_utils import get_repo
+    wh_repo = get_repo('warehouse')
+    locations = wh_repo.list_all_locations_with_path()
+    return render_template('packing/field_transfer.html', locations=locations)
+
+
+@packing_bp.route('/api/field/transfer', methods=['POST'])
+@login_required
+@_require_packing
+def api_field_transfer():
+    """현장 창고이동 API — 출발위치→도착위치 재고 이동."""
+    data = request.get_json(silent=True) or {}
+    barcode = data.get('barcode', '').strip()
+    from_location_id = data.get('from_location_id')
+    to_location_id = data.get('to_location_id')
+    quantity = data.get('quantity', 1)
+
+    if not barcode:
+        return jsonify({'ok': False, 'error': '상품 바코드를 입력해주세요.'})
+    if not from_location_id or not to_location_id:
+        return jsonify({'ok': False, 'error': '출발/도착 로케이션을 선택해주세요.'})
+    if int(from_location_id) == int(to_location_id):
+        return jsonify({'ok': False, 'error': '동일 위치로는 이동할 수 없습니다.'})
+    if not quantity or quantity < 1:
+        return jsonify({'ok': False, 'error': '수량은 1 이상이어야 합니다.'})
+
+    from db_utils import get_repo
+    inv_repo = get_repo('inventory')
+
+    # SKU 조회
+    sku = inv_repo.get_sku_by_barcode(barcode)
+    if not sku:
+        sku = inv_repo.get_sku_by_code(barcode)
+    if not sku:
+        return jsonify({'ok': False, 'error': f'미등록 바코드: {barcode}',
+                        'error_type': 'not_found'})
+
+    from_loc = int(from_location_id)
+    to_loc = int(to_location_id)
+    qty = int(quantity)
+
+    # 출발 위치 재고 확인
+    stock = inv_repo.get_stock(sku['id'], from_loc)
+    if not stock or stock['quantity'] < qty:
+        avail = stock['quantity'] if stock else 0
+        return jsonify({'ok': False,
+                        'error': f'재고 부족: 현재 {avail}개 (요청 {qty}개)'})
+
+    # 이동 처리
+    try:
+        inv_repo.adjust_stock(sku['id'], from_loc, -qty)
+        inv_repo.adjust_stock(sku['id'], to_loc, qty)
+        inv_repo.log_movement({
+            'sku_id': sku['id'], 'location_id': from_loc,
+            'movement_type': 'transfer_out', 'quantity': -qty,
+            'memo': '현장스캔 이동(출발)', 'user_id': current_user.id,
+        })
+        inv_repo.log_movement({
+            'sku_id': sku['id'], 'location_id': to_loc,
+            'movement_type': 'transfer_in', 'quantity': qty,
+            'memo': '현장스캔 이동(도착)', 'user_id': current_user.id,
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'이동 처리 실패: {e}'})
+
+    return jsonify({
+        'ok': True,
+        'sku_name': sku.get('name', ''),
+        'sku_code': sku.get('sku_code', ''),
+        'quantity': qty,
+    })
+
+
+@packing_bp.route('/field/stockcheck')
+@login_required
+@_require_packing
+def field_stockcheck():
+    """현장 재고실사(Cycle Count) 스캔 모드."""
+    from db_utils import get_repo
+    wh_repo = get_repo('warehouse')
+    locations = wh_repo.list_all_locations_with_path()
+    return render_template('packing/field_stockcheck.html', locations=locations)
+
+
+@packing_bp.route('/api/field/stock-at-location', methods=['POST'])
+@login_required
+@_require_packing
+def api_field_stock_at_location():
+    """특정 로케이션의 재고 목록 조회."""
+    data = request.get_json(silent=True) or {}
+    location_id = data.get('location_id')
+    if not location_id:
+        return jsonify({'ok': False, 'error': '로케이션을 선택해주세요.'})
+
+    from db_utils import get_repo
+    inv_repo = get_repo('inventory')
+    stocks = inv_repo.list_stock(location_id=int(location_id))
+
+    items = []
+    for st in (stocks or []):
+        sku = inv_repo.get_sku(st['sku_id']) if st.get('sku_id') else None
+        items.append({
+            'sku_id': st['sku_id'],
+            'sku_code': sku.get('sku_code', '') if sku else '',
+            'sku_name': sku.get('name', '') if sku else '',
+            'barcode': sku.get('barcode', '') if sku else '',
+            'system_qty': st.get('quantity', 0),
+            'lot_number': st.get('lot_number', ''),
+        })
+
+    return jsonify({'ok': True, 'items': items})
+
+
+@packing_bp.route('/api/field/stockcheck', methods=['POST'])
+@login_required
+@_require_packing
+def api_field_stockcheck():
+    """재고실사 조정 API — 실수량과 시스템 수량 차이 반영."""
+    data = request.get_json(silent=True) or {}
+    location_id = data.get('location_id')
+    adjustments = data.get('adjustments', [])
+
+    if not location_id:
+        return jsonify({'ok': False, 'error': '로케이션을 선택해주세요.'})
+    if not adjustments:
+        return jsonify({'ok': False, 'error': '조정할 항목이 없습니다.'})
+
+    from db_utils import get_repo
+    inv_repo = get_repo('inventory')
+
+    loc_id = int(location_id)
+    adjusted_count = 0
+
+    for adj in adjustments:
+        sku_id = adj.get('sku_id')
+        actual_qty = adj.get('actual_qty')
+        system_qty = adj.get('system_qty', 0)
+
+        if sku_id is None or actual_qty is None:
+            continue
+
+        delta = int(actual_qty) - int(system_qty)
+        if delta == 0:
+            continue
+
+        inv_repo.adjust_stock(int(sku_id), loc_id, delta)
+        inv_repo.log_movement({
+            'sku_id': int(sku_id),
+            'location_id': loc_id,
+            'movement_type': 'adjust',
+            'quantity': delta,
+            'memo': f'현장실사: 시스템 {system_qty} → 실제 {actual_qty}',
+            'user_id': current_user.id,
+        })
+        adjusted_count += 1
+
+    return jsonify({'ok': True, 'adjusted_count': adjusted_count})
+
+
+@packing_bp.route('/field/shipping')
+@login_required
+@_require_packing
+def field_shipping():
+    """현장 출고상차 스캔 모드."""
+    return render_template('packing/field_shipping.html')
+
+
+@packing_bp.route('/api/field/shipping-scan', methods=['POST'])
+@login_required
+@_require_packing
+def api_field_shipping_scan():
+    """출고상차 송장 스캔 API — 송장번호로 주문 찾아 상차 완료 처리."""
+    data = request.get_json(silent=True) or {}
+    barcode = data.get('barcode', '').strip()
+
+    if not barcode:
+        return jsonify({'ok': False, 'error': '송장번호를 스캔해주세요.'})
+
+    from db_utils import get_repo
+    order_repo = get_repo('order')
+
+    barcode_clean = barcode.replace('-', '')
+    shipments = order_repo.search_by_invoice(barcode_clean) or []
+
+    if not shipments:
+        return jsonify({'ok': False, 'error': f'송장번호 "{barcode}" 미확인',
+                        'error_type': 'not_found'})
+
+    ship = shipments[0]
+    order_id = ship.get('order_id')
+    status = ship.get('status', '')
+
+    # 이미 출고 완료된 건
+    if status in ('shipped', 'delivered'):
+        return jsonify({'ok': False,
+                        'error': f'이미 출고된 송장입니다 ({status})',
+                        'error_type': 'already_shipped'})
+
+    # 상차 완료 처리 (상태 → shipped)
+    try:
+        if order_id:
+            order_repo.update_order_status(order_id, 'shipped')
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'상태 변경 실패: {e}'})
+
+    return jsonify({
+        'ok': True,
+        'order_no': ship.get('order_no', ''),
+        'recipient': ship.get('recipient_name', ship.get('name', '')),
+        'channel': ship.get('channel', ''),
+        'courier': ship.get('courier', ''),
+    })
+
+
+@packing_bp.route('/api/field/sku-lookup', methods=['POST'])
+@login_required
+@_require_packing
+def api_field_sku_lookup():
+    """바코드로 SKU 정보 + 재고 조회 (현장모드 공통)."""
+    data = request.get_json(silent=True) or {}
+    barcode = data.get('barcode', '').strip()
+    location_id = data.get('location_id')
+
+    if not barcode:
+        return jsonify({'ok': False, 'error': '바코드를 입력해주세요.'})
+
+    from db_utils import get_repo
+    inv_repo = get_repo('inventory')
+
+    sku = inv_repo.get_sku_by_barcode(barcode)
+    if not sku:
+        sku = inv_repo.get_sku_by_code(barcode)
+    if not sku:
+        return jsonify({'ok': False, 'error': f'미등록 바코드: {barcode}',
+                        'error_type': 'not_found'})
+
+    result = {
+        'ok': True,
+        'sku_id': sku['id'],
+        'sku_code': sku.get('sku_code', ''),
+        'sku_name': sku.get('name', ''),
+        'barcode': sku.get('barcode', ''),
+        'storage_temp': sku.get('storage_temp', 'ambient'),
+    }
+
+    # 특정 위치의 재고
+    if location_id:
+        stock = inv_repo.get_stock(sku['id'], int(location_id))
+        result['stock_qty'] = stock['quantity'] if stock else 0
+
+    # 전체 재고
+    all_stocks = inv_repo.list_stock_by_sku(sku['id'])
+    result['total_stock'] = sum(s.get('quantity', 0) for s in (all_stocks or []))
+
+    return jsonify(result)

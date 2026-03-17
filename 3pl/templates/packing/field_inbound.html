@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block title %}입고 스캔 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<a href="{{ url_for('packing.field_dashboard') }}">현장모드</a> &rsaquo; <span>입고 스캔</span>
+{% endblock %}
+
+{% block content %}
+<style>
+    .scan-input-lg {
+        font-size: 1.5rem;
+        padding: 0.8rem 1rem;
+        text-align: center;
+        border: 2px solid var(--border);
+        border-radius: 10px;
+        font-family: 'Pretendard', monospace;
+    }
+    .scan-input-lg:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(58, 134, 255, 0.2);
+    }
+    .result-card {
+        border-radius: 12px;
+        padding: 1.2rem;
+        margin-bottom: 0.8rem;
+        border: 2px solid var(--border);
+    }
+    .result-card.success {
+        border-color: #22c55e;
+        background: rgba(34, 197, 94, 0.05);
+    }
+    .result-card.error {
+        border-color: #ef4444;
+        background: rgba(239, 68, 68, 0.05);
+    }
+    .field-error-banner {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        background: #ef4444;
+        color: #fff;
+        text-align: center;
+        font-size: 1.1rem;
+        font-weight: 600;
+        padding: 0.8rem;
+        z-index: 9999;
+        display: none;
+    }
+    .field-error-banner.show { display: block; }
+    .sku-info {
+        font-size: 1.3rem;
+        font-weight: 700;
+    }
+    .stock-info {
+        font-size: 2rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+    .history-item {
+        padding: 0.5rem 0;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.85rem;
+    }
+</style>
+
+<div id="errorBanner" class="field-error-banner"></div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0"><i class="bi bi-box-arrow-in-down me-2"></i>입고 스캔</h4>
+    <a href="{{ url_for('packing.field_dashboard') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>현장홈
+    </a>
+</div>
+
+<!-- 로케이션 선택 -->
+<div class="data-card mb-3">
+    <div class="p-3">
+        <label class="form-label fw-semibold" style="font-size:0.85rem;">보관 로케이션</label>
+        <select id="locationSelect" class="form-select" style="font-size:1.1rem;">
+            <option value="">로케이션 선택</option>
+            {% for loc in locations %}
+            <option value="{{ loc.id }}">{{ loc.display }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
+<!-- 바코드 스캔 입력 -->
+<div class="data-card mb-3">
+    <div class="p-3">
+        <label class="form-label fw-semibold" style="font-size:0.85rem;">상품 바코드</label>
+        <input type="text" id="barcodeInput" class="form-control scan-input-lg"
+               placeholder="바코드 스캔 대기..." autofocus>
+        <div class="row g-2 mt-2">
+            <div class="col-6">
+                <label class="form-label" style="font-size:0.75rem;">수량</label>
+                <input type="number" id="qtyInput" class="form-control" value="1" min="1" style="font-size:1.2rem; text-align:center;">
+            </div>
+            <div class="col-6">
+                <label class="form-label" style="font-size:0.75rem;">LOT (선택)</label>
+                <input type="text" id="lotInput" class="form-control" placeholder="LOT번호">
+            </div>
+        </div>
+        <button id="inboundBtn" class="btn btn-primary btn-lg w-100 mt-3" onclick="processInbound()">
+            <i class="bi bi-box-arrow-in-down me-1"></i>입고 처리
+        </button>
+    </div>
+</div>
+
+<!-- 스캔 결과 -->
+<div id="resultArea"></div>
+
+<!-- 작업 이력 -->
+<div class="data-card">
+    <div class="data-card-header"><h6 class="mb-0">이번 세션 입고 이력</h6>
+        <span id="sessionCount" class="badge bg-primary">0</span>
+    </div>
+    <div id="historyArea" class="p-3" style="max-height:300px; overflow-y:auto;">
+        <div class="text-center text-muted py-3">아직 입고 내역이 없습니다</div>
+    </div>
+</div>
+
+<script>
+let sessionHistory = [];
+
+// 바코드 입력 후 Enter → 입고 처리
+document.getElementById('barcodeInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        processInbound();
+    }
+});
+
+// 페이지 클릭 시 바코드 입력으로 포커스
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('select, input, button, a')) {
+        document.getElementById('barcodeInput').focus();
+    }
+});
+
+function processInbound() {
+    const barcode = document.getElementById('barcodeInput').value.trim();
+    const locationId = document.getElementById('locationSelect').value;
+    const quantity = parseInt(document.getElementById('qtyInput').value) || 1;
+    const lotNumber = document.getElementById('lotInput').value.trim();
+
+    if (!locationId) { showError('로케이션을 먼저 선택해주세요.'); return; }
+    if (!barcode) { showError('바코드를 스캔해주세요.'); return; }
+
+    document.getElementById('inboundBtn').disabled = true;
+
+    fetch('/packing/api/field/inbound', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ barcode, location_id: locationId, quantity, lot_number: lotNumber })
+    })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('inboundBtn').disabled = false;
+        if (data.ok) {
+            playSuccess();
+            showResult(true, `${data.sku_name} ${quantity}개 입고 완료 (재고: ${data.current_stock}개)`);
+            addHistory(data.sku_name, data.sku_code, quantity);
+            // 입력 초기화
+            document.getElementById('barcodeInput').value = '';
+            document.getElementById('qtyInput').value = '1';
+            document.getElementById('barcodeInput').focus();
+        } else {
+            playError();
+            showError(data.error);
+            showResult(false, data.error);
+        }
+    })
+    .catch(() => {
+        document.getElementById('inboundBtn').disabled = false;
+        playError();
+        showError('네트워크 오류');
+    });
+}
+
+function showResult(ok, msg) {
+    const area = document.getElementById('resultArea');
+    area.innerHTML = `<div class="result-card ${ok ? 'success' : 'error'}">
+        <div class="d-flex align-items-center">
+            <i class="bi ${ok ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger'}" style="font-size:1.5rem;"></i>
+            <span class="ms-2" style="font-size:1.1rem; font-weight:600;">${msg}</span>
+        </div>
+    </div>`;
+    // 3초 후 자동 숨김
+    setTimeout(() => { area.innerHTML = ''; }, 4000);
+}
+
+function addHistory(name, code, qty) {
+    const now = new Date();
+    const time = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+    sessionHistory.unshift({ name, code, qty, time });
+    document.getElementById('sessionCount').textContent = sessionHistory.length;
+
+    const area = document.getElementById('historyArea');
+    area.innerHTML = sessionHistory.map(h =>
+        `<div class="history-item d-flex justify-content-between">
+            <span><strong>${h.name}</strong> <small class="text-muted">(${h.code})</small></span>
+            <span><span class="fw-bold">${h.qty}</span>개 <small class="text-muted">${h.time}</small></span>
+        </div>`
+    ).join('');
+}
+
+function showError(msg) {
+    const banner = document.getElementById('errorBanner');
+    banner.textContent = msg;
+    banner.classList.add('show');
+    setTimeout(() => banner.classList.remove('show'), 3000);
+}
+
+function playSuccess() {
+    try {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = 880; osc.type = 'sine'; gain.gain.value = 0.15;
+        osc.start(); osc.stop(ctx.currentTime + 0.12);
+    } catch(e) {}
+}
+function playError() {
+    try {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = 300; osc.type = 'square'; gain.gain.value = 0.2;
+        osc.start(); osc.stop(ctx.currentTime + 0.3);
+    } catch(e) {}
+}
+
+// 자동 포커스
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('barcodeInput').focus();
+});
+</script>
+{% endblock %}

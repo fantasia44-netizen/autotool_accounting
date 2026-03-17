@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}현장모드 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>현장모드</span>{% endblock %}
+
+{% block content %}
+<style>
+    .field-card {
+        border: 2px solid var(--border);
+        border-radius: 16px;
+        padding: 1.5rem;
+        text-align: center;
+        text-decoration: none;
+        color: inherit;
+        transition: all 0.2s;
+        display: block;
+    }
+    .field-card:hover {
+        border-color: var(--accent);
+        box-shadow: 0 4px 12px rgba(58, 134, 255, 0.15);
+        transform: translateY(-2px);
+    }
+    .field-card .icon {
+        font-size: 2.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .field-card .label {
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+    .field-card .desc {
+        font-size: 0.8rem;
+        color: #666;
+        margin-top: 0.3rem;
+    }
+    .stat-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.6rem 0;
+        border-bottom: 1px solid var(--border);
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+</style>
+
+<h4 class="page-title mb-3">
+    <i class="bi bi-phone me-2"></i>현장모드
+    <small class="text-muted ms-2" style="font-size:0.7em;">{{ today }}</small>
+</h4>
+
+<!-- 오늘 작업 요약 -->
+<div class="data-card mb-3">
+    <div class="data-card-header"><h6 class="mb-0">오늘 작업 현황</h6></div>
+    <div class="p-3">
+        <div class="stat-row">
+            <span><i class="bi bi-box-arrow-in-down text-primary me-2"></i>입고</span>
+            <span class="stat-value text-primary">{{ inbound_cnt }}</span>
+        </div>
+        <div class="stat-row">
+            <span><i class="bi bi-truck text-success me-2"></i>출고</span>
+            <span class="stat-value text-success">{{ outbound_cnt }}</span>
+        </div>
+        <div class="stat-row">
+            <span><i class="bi bi-arrow-left-right text-warning me-2"></i>이동</span>
+            <span class="stat-value text-warning">{{ transfer_cnt }}</span>
+        </div>
+        <div class="stat-row">
+            <span><i class="bi bi-sliders text-info me-2"></i>조정</span>
+            <span class="stat-value text-info">{{ adjust_cnt }}</span>
+        </div>
+    </div>
+</div>
+
+<!-- 작업 메뉴 -->
+<div class="row g-3 mb-4">
+    <div class="col-6">
+        <a href="{{ url_for('packing.field_inbound') }}" class="field-card">
+            <div class="icon text-primary"><i class="bi bi-box-arrow-in-down"></i></div>
+            <div class="label">입고 스캔</div>
+            <div class="desc">바코드 스캔으로 입고 처리</div>
+        </a>
+    </div>
+    <div class="col-6">
+        <a href="{{ url_for('packing.field_transfer') }}" class="field-card">
+            <div class="icon text-warning"><i class="bi bi-arrow-left-right"></i></div>
+            <div class="label">창고이동</div>
+            <div class="desc">위치 간 재고 이동</div>
+        </a>
+    </div>
+    <div class="col-6">
+        <a href="{{ url_for('packing.field_stockcheck') }}" class="field-card">
+            <div class="icon text-info"><i class="bi bi-clipboard-data"></i></div>
+            <div class="label">재고실사</div>
+            <div class="desc">로케이션별 실수량 확인</div>
+        </a>
+    </div>
+    <div class="col-6">
+        <a href="{{ url_for('packing.field_shipping') }}" class="field-card">
+            <div class="icon text-success"><i class="bi bi-truck"></i></div>
+            <div class="label">출고상차</div>
+            <div class="desc">송장 스캔으로 상차 완료</div>
+        </a>
+    </div>
+    <div class="col-6">
+        <a href="{{ url_for('packing.picking') }}" class="field-card">
+            <div class="icon" style="color:#8b5cf6;"><i class="bi bi-clipboard-check"></i></div>
+            <div class="label">피킹</div>
+            <div class="desc">피킹리스트 스캔 작업</div>
+        </a>
+    </div>
+    <div class="col-6">
+        <a href="{{ url_for('packing.recording') }}" class="field-card">
+            <div class="icon" style="color:#ec4899;"><i class="bi bi-camera-video-fill"></i></div>
+            <div class="label">촬영/검수</div>
+            <div class="desc">출고 촬영 + 상품 검수</div>
+        </a>
+    </div>
+</div>
+
+<!-- 최근 작업 로그 -->
+{% if recent_movements %}
+<div class="data-card">
+    <div class="data-card-header"><h6 class="mb-0">최근 작업</h6></div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>시간</th><th>유형</th><th>SKU</th><th class="text-end">수량</th></tr>
+            </thead>
+            <tbody>
+                {% for m in recent_movements %}
+                <tr>
+                    <td class="text-muted" style="font-size:0.75rem;">{{ m.created_at[11:16] if m.created_at else '-' }}</td>
+                    <td>
+                        {% if m.movement_type == 'inbound' %}<span class="status-badge status-progress">입고</span>
+                        {% elif m.movement_type == 'outbound' %}<span class="status-badge status-done">출고</span>
+                        {% elif m.movement_type in ('transfer_in','transfer_out') %}<span class="status-badge status-wait">이동</span>
+                        {% elif m.movement_type == 'adjust' %}<span class="status-badge status-neutral">조정</span>
+                        {% else %}<span class="status-badge">{{ m.movement_type }}</span>{% endif %}
+                    </td>
+                    <td style="font-size:0.85rem;">{{ m.sku_id }}</td>
+                    <td class="text-end fw-semibold">{{ m.quantity }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}창고이동 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<span>창고이동</span>{% endblock %}
+
+{% block content %}
+<h4 class="page-title"><i class="bi bi-arrow-left-right me-2"></i>창고이동</h4>
+
+<!-- 이동 등록 -->
+<div class="data-card mb-3">
+    <div class="data-card-header">
+        <h6 class="mb-0">이동 등록</h6>
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('transferForm').classList.toggle('d-none')">
+            <i class="bi bi-plus"></i> 등록
+        </button>
+    </div>
+    <div id="transferForm" class="d-none">
+        <div class="p-3">
+            <form method="post" action="{{ url_for('operator.transfer_create') }}">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">상품 *</label>
+                        <select name="sku_id" class="form-select form-select-sm" required>
+                            <option value="">선택</option>
+                            {% for s in skus %}
+                            <option value="{{ s.id }}">{{ s.sku_code }} — {{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label" style="font-size:0.75rem;">수량 *</label>
+                        <input type="number" name="quantity" class="form-control form-control-sm" min="1" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">출발 로케이션</label>
+                        <select name="from_location_id" class="form-select form-select-sm">
+                            <option value="">미지정</option>
+                            {% for loc in locations %}
+                            <option value="{{ loc.id }}">{{ loc.display }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" style="font-size:0.75rem;">도착 로케이션</label>
+                        <select name="to_location_id" class="form-select form-select-sm">
+                            <option value="">미지정</option>
+                            {% for loc in locations %}
+                            <option value="{{ loc.id }}">{{ loc.display }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">이동</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('transferForm').classList.add('d-none')">취소</button>
+                    </div>
+                </div>
+                <div class="row g-2 mt-1">
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">사유</label>
+                        <input type="text" name="reason" class="form-control form-control-sm" placeholder="이동 사유">
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 이동 목록 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6 class="mb-0">이동 내역</h6>
+        <span class="text-muted" style="font-size:0.8rem;">{{ shipments|length }}건</span>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr><th>ID</th><th>상품</th><th class="text-end">수량</th><th>출발</th><th>도착</th><th>사유</th><th>상태</th><th>등록일</th></tr>
+            </thead>
+            <tbody>
+                {% for s in shipments %}
+                <tr>
+                    <td>{{ s.id }}</td>
+                    <td>{{ sku_map.get(s.sku_id, s.sku_id or '-') }}</td>
+                    <td class="text-end fw-semibold">{{ s.quantity or '-' }}</td>
+                    <td style="font-size:0.8rem;">{{ wh_map.get(s.from_warehouse_id, s.from_warehouse_id or '-') }}</td>
+                    <td style="font-size:0.8rem;">{{ wh_map.get(s.to_warehouse_id, s.to_warehouse_id or '-') }}</td>
+                    <td>{{ s.reason or '-' }}</td>
+                    <td><span class="status-badge status-{% if s.status == 'completed' %}done{% else %}wait{% endif %}">{{ s.status }}</span></td>
+                    <td class="text-muted" style="font-size:0.8rem;">{{ s.created_at[:10] if s.created_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center text-muted py-4">이동 내역이 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

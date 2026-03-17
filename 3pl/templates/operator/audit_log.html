@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}감사 로그 — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+<span>감사 로그</span>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0"><i class="bi bi-shield-check me-2"></i>감사 로그 (Audit Trail)</h4>
+</div>
+
+<!-- 필터 -->
+<div class="data-card mb-3">
+    <div class="data-card-body">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label" style="font-size:0.75rem;">테이블</label>
+                <select name="table" class="form-select form-select-sm" style="width:150px;">
+                    <option value="">전체</option>
+                    {% for key, label in table_labels.items() %}
+                    <option value="{{ key }}" {{ 'selected' if filters.table == key }}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" style="font-size:0.75rem;">액션</label>
+                <select name="action" class="form-select form-select-sm" style="width:120px;">
+                    <option value="">전체</option>
+                    <option value="create" {{ 'selected' if filters.action == 'create' }}>생성</option>
+                    <option value="update" {{ 'selected' if filters.action == 'update' }}>수정</option>
+                    <option value="delete" {{ 'selected' if filters.action == 'delete' }}>삭제</option>
+                    <option value="restore" {{ 'selected' if filters.action == 'restore' }}>복원</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label" style="font-size:0.75rem;">레코드ID</label>
+                <input type="text" name="record_id" value="{{ filters.record_id }}" class="form-control form-control-sm" style="width:100px;" placeholder="ID">
+            </div>
+            <div class="col-auto">
+                <label class="form-label" style="font-size:0.75rem;">시작일</label>
+                <input type="date" name="date_from" value="{{ filters.date_from }}" class="form-control form-control-sm" style="width:140px;">
+            </div>
+            <div class="col-auto">
+                <label class="form-label" style="font-size:0.75rem;">종료일</label>
+                <input type="date" name="date_to" value="{{ filters.date_to }}" class="form-control form-control-sm" style="width:140px;">
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-primary">조회</button>
+                <a href="{{ url_for('operator.audit_log') }}" class="btn btn-sm btn-outline-secondary">초기화</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 로그 목록 -->
+<div class="data-card">
+    <div class="data-card-header">
+        <h6 class="mb-0">변경 이력</h6>
+        <span class="text-muted" style="font-size:0.8rem;">{{ logs|length }}건</span>
+    </div>
+    <div class="data-card-body">
+        <table class="table table-compact mb-0">
+            <thead>
+                <tr>
+                    <th>일시</th>
+                    <th>액션</th>
+                    <th>테이블</th>
+                    <th>ID</th>
+                    <th>사용자</th>
+                    <th>메모</th>
+                    <th>상세</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td style="font-size:0.75rem; white-space:nowrap;">{{ format_kst(log.created_at, '%m-%d %H:%M') if log.created_at else '-' }}</td>
+                    <td>
+                        {% if log.action == 'create' %}
+                        <span class="status-badge status-done" style="font-size:0.7rem;">생성</span>
+                        {% elif log.action == 'update' %}
+                        <span class="status-badge status-active" style="font-size:0.7rem;">수정</span>
+                        {% elif log.action == 'delete' %}
+                        <span class="status-badge status-error" style="font-size:0.7rem;">삭제</span>
+                        {% elif log.action == 'restore' %}
+                        <span class="status-badge status-wait" style="font-size:0.7rem;">복원</span>
+                        {% else %}
+                        <span class="status-badge status-neutral" style="font-size:0.7rem;">{{ log.action }}</span>
+                        {% endif %}
+                    </td>
+                    <td style="font-size:0.8rem;">{{ table_labels.get(log.table_name, log.table_name) }}</td>
+                    <td style="font-family:monospace; font-size:0.8rem;">{{ log.record_id or '-' }}</td>
+                    <td style="font-size:0.8rem;">{{ log.user_name or 'system' }}</td>
+                    <td style="font-size:0.75rem;" class="text-muted">{{ log.memo or '' }}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                onclick="showDetail({{ log|tojson }})"
+                                style="font-size:0.7rem;">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                        {% if log.action == 'delete' and log.memo == 'soft_delete' %}
+                        <form method="post" action="{{ url_for('operator.audit_restore') }}" class="d-inline">
+                            <input type="hidden" name="table_name" value="{{ log.table_name }}">
+                            <input type="hidden" name="record_id" value="{{ log.record_id }}">
+                            <button class="btn btn-sm btn-outline-warning py-0 px-1"
+                                    onclick="return confirm('이 레코드를 복원하시겠습니까?')"
+                                    style="font-size:0.7rem;">
+                                <i class="bi bi-arrow-counterclockwise"></i> 복원
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">감사 로그가 없습니다</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 상세 모달 -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header py-2">
+                <h6 class="modal-title">변경 상세</h6>
+                <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-muted" style="font-size:0.8rem;">변경 전 (Before)</h6>
+                        <pre id="beforeData" style="font-size:0.75rem; max-height:400px; overflow:auto; background:#f8f9fa; padding:8px; border-radius:4px;"></pre>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted" style="font-size:0.8rem;">변경 후 (After)</h6>
+                        <pre id="afterData" style="font-size:0.75rem; max-height:400px; overflow:auto; background:#f0f8ff; padding:8px; border-radius:4px;"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function showDetail(log) {
+    let before = log.before_data;
+    let after = log.after_data;
+    try { before = JSON.parse(before); } catch(e) {}
+    try { after = JSON.parse(after); } catch(e) {}
+    document.getElementById('beforeData').textContent = before ? JSON.stringify(before, null, 2) : '(없음)';
+    document.getElementById('afterData').textContent = after ? JSON.stringify(after, null, 2) : '(없음)';
+    new bootstrap.Modal(document.getElementById('detailModal')).show();
+}
+</script>
+{% endblock %}

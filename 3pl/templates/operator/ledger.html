@@ -49,8 +49,8 @@
                         {% elif m.movement_type == 'adjust' %}<span class="status-badge status-wait">조정</span>
                         {% else %}<span class="status-badge status-neutral">{{ m.movement_type }}</span>{% endif %}
                     </td>
-                    <td>{{ m.sku_id }}</td>
-                    <td>{{ m.location_id or '-' }}</td>
+                    <td>{{ sku_map.get(m.sku_id, m.sku_id) }}</td>
+                    <td>{{ loc_map.get(m.location_id, m.location_id or '-') }}</td>
                     <td class="text-end fw-semibold {% if m.quantity > 0 %}text-success{% elif m.quantity < 0 %}text-danger{% endif %}">{{ '{:+d}'.format(m.quantity) }}</td>
                     <td>{{ m.lot_number or '-' }}</td>
                     <td class="text-muted">{{ m.memo or '-' }}</td>

@@ -21,11 +21,20 @@
                         </select>
                     </div>
                     <div class="mb-2">
+                        <label class="form-label" style="font-size:0.82rem;">창고</label>
+                        <select id="whSelect" class="form-select form-select-sm" onchange="filterAdjLoc(this.value)">
+                            <option value="">전체</option>
+                            {% for w in warehouses %}
+                            <option value="{{ w.id }}">{{ w.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-2">
                         <label class="form-label" style="font-size:0.82rem;">로케이션</label>
-                        <select name="location_id" class="form-select form-select-sm" required>
+                        <select id="locSelect" name="location_id" class="form-select form-select-sm" required>
                             <option value="">선택</option>
                             {% for loc in locations %}
-                            <option value="{{ loc.id }}">{{ loc.code }}</option>
+                            <option value="{{ loc.id }}" data-wh="{{ loc.warehouse_id or '' }}">{{ loc.display }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -56,11 +65,11 @@
                     <tbody>
                         {% for m in recent_adjustments %}
                         <tr>
-                            <td>{{ m.sku_id }}</td>
-                            <td>{{ m.location_id or '-' }}</td>
+                            <td>{{ sku_map.get(m.sku_id, m.sku_id) }}</td>
+                            <td>{{ loc_map.get(m.location_id, m.location_id or '-') }}</td>
                             <td class="text-end fw-semibold {% if m.quantity > 0 %}text-success{% else %}text-danger{% endif %}">{{ '{:+d}'.format(m.quantity) }}</td>
                             <td>{{ m.memo or '-' }}</td>
-                            <td class="text-muted">{{ m.created_at[:16] if m.created_at else '-' }}</td>
+                            <td class="text-muted" style="font-size:0.8rem;">{{ m.created_at[:16] if m.created_at else '-' }}</td>
                         </tr>
                         {% else %}
                         <tr><td colspan="5" class="text-center text-muted py-3">조정 내역 없음</td></tr>
@@ -71,4 +80,17 @@
         </div>
     </div>
 </div>
+
+<script>
+const allAdjLocOpts = [...document.getElementById('locSelect').options].slice(1);
+function filterAdjLoc(whId) {
+    const sel = document.getElementById('locSelect');
+    sel.innerHTML = '<option value="">선택</option>';
+    allAdjLocOpts.forEach(opt => {
+        if (!whId || opt.dataset.wh == whId) {
+            sel.appendChild(opt.cloneNode(true));
+        }
+    });
+}
+</script>
 {% endblock %}

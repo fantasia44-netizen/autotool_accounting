@@ -96,6 +96,12 @@ class DemoProxy:
             # 과금 요약
             if name == 'get_monthly_summary':
                 return {'by_category': {}, 'total': 0, 'items': []}
+            # 경영분석 P&L
+            if name == 'get_pnl':
+                return {'revenue': 0, 'cost_of_service': 0, 'operating_expense': 0,
+                        'gross_profit': 0, 'net_income': 0, 'detail': {}, 'year_month': ''}
+            if name == 'sum_expenses_by_month':
+                return {'by_category': {}, 'total': 0, 'items': []}
             # 리스트 반환 패턴 체크
             for prefix in DemoProxy._LIST_METHODS:
                 if name.startswith(prefix):

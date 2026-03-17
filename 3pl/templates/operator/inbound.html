@@ -34,21 +34,48 @@
                         </div>
                     </div>
                     <div class="mb-2">
-                        <label class="form-label" style="font-size:0.82rem;">로케이션</label>
-                        <select name="location_id" class="form-select form-select-sm" required>
-                            <option value="">선택</option>
-                            {% for loc in locations %}
-                            <option value="{{ loc.id }}">{{ loc.code }}</option>
+                        <label class="form-label" style="font-size:0.82rem;">창고</label>
+                        <select id="warehouseSelect" class="form-select form-select-sm" onchange="filterLocations(this.value)">
+                            <option value="">전체</option>
+                            {% for w in warehouses %}
+                            <option value="{{ w.id }}">{{ w.name }}</option>
                             {% endfor %}
                         </select>
                     </div>
                     <div class="mb-2">
-                        <label class="form-label" style="font-size:0.82rem;">수량</label>
-                        <input type="number" name="quantity" class="form-control form-control-sm" min="1" required>
+                        <label class="form-label" style="font-size:0.82rem;">로케이션</label>
+                        <select id="locationSelect" name="location_id" class="form-select form-select-sm" required>
+                            <option value="">선택</option>
+                            {% for loc in locations %}
+                            <option value="{{ loc.id }}" data-wh="{{ loc.warehouse_id or '' }}">{{ loc.display }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
-                    <div class="mb-2">
-                        <label class="form-label" style="font-size:0.82rem;">LOT 번호</label>
-                        <input type="text" name="lot_number" class="form-control form-control-sm" placeholder="선택 입력">
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="form-label" style="font-size:0.82rem;">수량</label>
+                            <input type="number" name="quantity" class="form-control form-control-sm" min="1" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label" style="font-size:0.82rem;">보관온도</label>
+                            <select name="storage_temp" class="form-select form-select-sm">
+                                <option value="">자동(SKU설정)</option>
+                                <option value="ambient">상온</option>
+                                <option value="cold">냉장</option>
+                                <option value="chilled">냉장(chilled)</option>
+                                <option value="frozen">냉동</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="form-label" style="font-size:0.82rem;">LOT 번호</label>
+                            <input type="text" name="lot_number" class="form-control form-control-sm" placeholder="선택 입력">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label" style="font-size:0.82rem;">소비기한</label>
+                            <input type="date" name="expiry_date" class="form-control form-control-sm">
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label" style="font-size:0.82rem;">메모</label>
@@ -71,10 +98,10 @@
                         {% for m in recent_inbounds %}
                         <tr>
                             <td>{{ sku_map.get(m.sku_id, m.sku_id) }}</td>
-                            <td>{{ m.location_id or '-' }}</td>
+                            <td>{{ loc_map.get(m.location_id, m.location_id or '-') }}</td>
                             <td class="text-end fw-semibold text-success">+{{ m.quantity }}</td>
                             <td>{{ m.lot_number or '-' }}</td>
-                            <td class="text-muted">{{ m.created_at[:16] if m.created_at else '-' }}</td>
+                            <td class="text-muted" style="font-size:0.8rem;">{{ m.created_at[:16] if m.created_at else '-' }}</td>
                         </tr>
                         {% else %}
                         <tr><td colspan="5" class="text-center text-muted py-3">입고 내역 없음</td></tr>
@@ -87,10 +114,22 @@
 </div>
 
 <script>
+// 창고별 로케이션 필터
+const allLocOptions = [...document.getElementById('locationSelect').options].slice(1); // 첫 번째 "선택" 제외
+
+function filterLocations(whId) {
+    const sel = document.getElementById('locationSelect');
+    sel.innerHTML = '<option value="">선택</option>';
+    allLocOptions.forEach(opt => {
+        if (!whId || opt.dataset.wh == whId) {
+            sel.appendChild(opt.cloneNode(true));
+        }
+    });
+}
+
 function loadClientSkus(clientId) {
     const sel = document.getElementById('skuSelect');
     if (!clientId) {
-        // 전체 SKU 다시 로드 → 페이지 리로드
         location.reload();
         return;
     }
