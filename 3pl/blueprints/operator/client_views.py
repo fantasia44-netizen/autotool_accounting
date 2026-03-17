@@ -263,6 +263,238 @@ def client_billing_confirm(client_id):
                             month=year_month))
 
 
+# ═══ 정산서 Excel 다운로드 ═══
+
+@operator_bp.route('/clients/<int:client_id>/billing/export')
+@login_required
+@_require_operator
+def client_billing_export(client_id):
+    """고객사 월별 정산 내역 Excel 다운로드."""
+    import io
+    from flask import send_file
+    from db_utils import get_repo
+    from services.client_billing_service import CATEGORY_LABELS
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill
+    except ImportError:
+        flash('openpyxl 미설치', 'danger')
+        return redirect(url_for('operator.client_billing', client_id=client_id))
+
+    client_repo = get_repo('client')
+    client = client_repo.get_client(client_id)
+    if not client:
+        flash('고객사를 찾을 수 없습니다.', 'warning')
+        return redirect(url_for('operator.clients'))
+
+    billing_repo = get_repo('client_billing')
+    year_month = request.args.get('month')
+    if not year_month:
+        from datetime import datetime, timezone
+        year_month = datetime.now(timezone.utc).strftime('%Y-%m')
+
+    summary = billing_repo.get_monthly_summary(client_id, year_month)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f'{year_month} 정산'
+
+    # 헤더 스타일
+    header_font = Font(bold=True, size=12)
+    header_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
+
+    # 타이틀
+    ws.merge_cells('A1:G1')
+    ws['A1'] = f'{client.get("name", "")} — {year_month} 정산서'
+    ws['A1'].font = Font(bold=True, size=14)
+
+    # 카테고리별 소계
+    ws.append([])
+    ws.append(['카테고리', '합계'])
+    for cat_key, cat_amount in summary.get('by_category', {}).items():
+        ws.append([CATEGORY_LABELS.get(cat_key, cat_key), f'{cat_amount:,.0f}원'])
+    ws.append(['총 합계', f'{summary.get("total", 0):,.0f}원'])
+    ws.append([])
+
+    # 상세 내역
+    headers = ['카테고리', '항목', '수량', '단가', '금액', '메모', '일시']
+    ws.append(headers)
+    row_num = ws.max_row
+    for col_num, h in enumerate(headers, 1):
+        cell = ws.cell(row=row_num, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+
+    for item in summary.get('items', []):
+        ws.append([
+            CATEGORY_LABELS.get(item.get('category', ''), item.get('category', '')),
+            item.get('fee_name', ''),
+            item.get('quantity', 0),
+            float(item.get('unit_price', 0)),
+            float(item.get('total_amount', 0)),
+            item.get('memo', ''),
+            (item.get('created_at', '')[:10] if item.get('created_at') else ''),
+        ])
+
+    # 열 너비 조정
+    ws.column_dimensions['A'].width = 12
+    ws.column_dimensions['B'].width = 16
+    ws.column_dimensions['C'].width = 10
+    ws.column_dimensions['D'].width = 12
+    ws.column_dimensions['E'].width = 14
+    ws.column_dimensions['F'].width = 20
+    ws.column_dimensions['G'].width = 12
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f'{client.get("name", "정산")}_{year_month}_정산서.xlsx'
+    return send_file(buf, download_name=filename,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+# ═══ 보관비 수동 계산 ═══
+
+@operator_bp.route('/clients/<int:client_id>/billing/storage', methods=['POST'])
+@login_required
+@_require_operator
+def client_billing_storage_calc(client_id):
+    """보관비 수동 일괄 계산."""
+    _verify_client_owner(client_id)
+    from db_utils import get_repo
+    from services.client_billing_service import calculate_storage_fee
+    year_month = request.form.get('year_month')
+    force = request.form.get('force') == '1'
+
+    if not year_month:
+        from datetime import datetime, timezone
+        year_month = datetime.now(timezone.utc).strftime('%Y-%m')
+
+    result = calculate_storage_fee(
+        get_repo('client_billing'), get_repo('client_rate'),
+        get_repo('inventory'), client_id, year_month, force=force)
+
+    status = result.get('status', 'error') if result else 'error'
+    if status == 'ok':
+        temp_info = result.get('temp_qty', {})
+        detail = ', '.join(f'{k}:{v}개' for k, v in temp_info.items())
+        flash(f'{year_month} 보관비 계산 완료 ({detail}, {result.get("days")}일)', 'success')
+    elif status == 'already_calculated':
+        flash(f'{year_month} 보관비가 이미 계산되어 있습니다 ({result.get("count")}건). '
+              f'재계산하려면 [강제 재계산]을 사용하세요.', 'warning')
+    elif status == 'no_rates':
+        flash('보관비 요금표가 등록되지 않았습니다. 고객사 요금표에서 먼저 등록해주세요.', 'warning')
+    else:
+        flash(f'보관비 계산 오류: {result.get("error", "알 수 없는 오류")}', 'danger')
+
+    return redirect(url_for('operator.client_billing', client_id=client_id,
+                            month=year_month))
+
+
+# ═══ VAS(부가서비스) 수동 등록 ═══
+
+@operator_bp.route('/clients/<int:client_id>/billing/vas', methods=['POST'])
+@login_required
+@_require_operator
+def client_billing_vas(client_id):
+    """VAS 수동 과금 등록."""
+    _verify_client_owner(client_id)
+    from db_utils import get_repo
+    from services.client_billing_service import record_vas_fee
+    vas_name = request.form.get('vas_name', '').strip()
+    quantity = request.form.get('quantity', 1, type=int)
+    memo = request.form.get('memo', '').strip()
+
+    if not vas_name:
+        flash('서비스 항목을 선택해주세요.', 'warning')
+        return redirect(url_for('operator.client_billing', client_id=client_id))
+
+    record_vas_fee(get_repo('client_billing'), get_repo('client_rate'),
+                   client_id, vas_name, quantity=quantity, memo=memo)
+    flash(f'VAS 과금 등록: {vas_name} × {quantity}', 'success')
+    return redirect(url_for('operator.client_billing', client_id=client_id))
+
+
+# ═══ 과금 실패 이벤트 재처리 ═══
+
+@operator_bp.route('/billing/failed-events')
+@login_required
+@_require_operator
+def billing_failed_events():
+    """과금 실패 이벤트 목록."""
+    from db_utils import get_repo
+    billing_repo = get_repo('client_billing')
+    try:
+        events = billing_repo.list_failed_events() or []
+    except Exception:
+        events = []
+    return render_template('operator/billing_failed_events.html', events=events)
+
+
+@operator_bp.route('/billing/failed-events/<int:event_id>/retry', methods=['POST'])
+@login_required
+@_require_operator
+def billing_failed_event_retry(event_id):
+    """실패 이벤트 재처리 시도."""
+    import json
+    from db_utils import get_repo
+    billing_repo = get_repo('client_billing')
+    rate_repo = get_repo('client_rate')
+    inv_repo = get_repo('inventory')
+
+    event = billing_repo.get_failed_event(event_id)
+    if not event:
+        flash('이벤트를 찾을 수 없습니다.', 'warning')
+        return redirect(url_for('operator.billing_failed_events'))
+
+    event_type = event.get('event_type', '')
+    client_id = event.get('client_id')
+    event_data = event.get('event_data', '{}')
+    if isinstance(event_data, str):
+        try:
+            event_data = json.loads(event_data)
+        except Exception:
+            event_data = {}
+
+    try:
+        from services import client_billing_service as cbs
+        if event_type == 'inbound':
+            cbs.record_inbound_fee(billing_repo, rate_repo, client_id, **event_data)
+        elif event_type == 'outbound':
+            cbs.record_outbound_fee(billing_repo, rate_repo, client_id, **event_data)
+        elif event_type == 'material':
+            cbs.record_packing_fee(billing_repo, rate_repo, client_id, **event_data)
+        elif event_type == 'return':
+            cbs.record_return_fee(billing_repo, rate_repo, client_id, **event_data)
+        elif event_type == 'storage':
+            cbs.calculate_storage_fee(billing_repo, rate_repo, inv_repo,
+                                      client_id, **event_data)
+        elif event_type == 'vas':
+            cbs.record_vas_fee(billing_repo, rate_repo, client_id, **event_data)
+        else:
+            flash(f'알 수 없는 이벤트 유형: {event_type}', 'warning')
+            return redirect(url_for('operator.billing_failed_events'))
+
+        billing_repo.update_failed_event(event_id, {'status': 'resolved'})
+        flash(f'재처리 완료: {event_type} (client_id={client_id})', 'success')
+    except Exception as e:
+        flash(f'재처리 실패: {e}', 'danger')
+
+    return redirect(url_for('operator.billing_failed_events'))
+
+
+@operator_bp.route('/billing/failed-events/<int:event_id>/dismiss', methods=['POST'])
+@login_required
+@_require_operator
+def billing_failed_event_dismiss(event_id):
+    """실패 이벤트 무시/확인 처리."""
+    from db_utils import get_repo
+    billing_repo = get_repo('client_billing')
+    billing_repo.update_failed_event(event_id, {'status': 'dismissed'})
+    flash('이벤트가 무시 처리되었습니다.', 'info')
+    return redirect(url_for('operator.billing_failed_events'))
+
+
 # ═══ 고객사 상품 (SKU) ═══
 
 @operator_bp.route('/clients/<int:client_id>/skus', methods=['POST'])

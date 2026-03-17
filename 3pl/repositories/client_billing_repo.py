@@ -13,6 +13,31 @@ class ClientBillingRepository(BaseRepository):
     def log_fee(self, data):
         return self._insert(self.LOG_TABLE, data)
 
+    def find_by_dedupe_key(self, client_id, dedupe_key):
+        """dedupe_key로 기존 과금 로그 조회. 있으면 row 반환, 없으면 None."""
+        rows = self._query(self.LOG_TABLE, filters=[
+            ('client_id', 'eq', client_id),
+            ('dedupe_key', 'eq', dedupe_key),
+        ], limit=1)
+        return rows[0] if rows else None
+
+    def log_fee_idempotent(self, data):
+        """중복방지 과금 기록. dedupe_key가 있으면 중복 체크 후 insert.
+
+        Returns:
+            (row, is_new) — is_new=False이면 기존 row 반환(스킵됨).
+        """
+        dedupe_key = data.get('dedupe_key')
+        if dedupe_key:
+            existing = self.find_by_dedupe_key(data.get('client_id'), dedupe_key)
+            if existing:
+                return existing, False
+        row = self._insert(self.LOG_TABLE, data)
+        return row, True
+
+    def delete_fee(self, fee_id):
+        return self._delete(self.LOG_TABLE, fee_id)
+
     def list_fees(self, client_id, year_month=None, category=None, limit=500):
         filters = [('client_id', 'eq', client_id)]
         if year_month:
@@ -57,3 +82,19 @@ class ClientBillingRepository(BaseRepository):
             filters.append(('status', 'eq', status))
         return self._query(self.INVOICE_TABLE, filters=filters or None,
                            order_by='created_at', order_desc=True, limit=limit)
+
+    # ── 과금 실패 이벤트 (DLQ) ──
+
+    FAILED_TABLE = 'failed_billing_events'
+
+    def list_failed_events(self, status='pending', limit=200):
+        filters = [('status', 'eq', status)] if status else None
+        return self._query(self.FAILED_TABLE, filters=filters,
+                           order_by='created_at', order_desc=True, limit=limit)
+
+    def get_failed_event(self, event_id):
+        rows = self._query(self.FAILED_TABLE, filters=[('id', 'eq', event_id)])
+        return rows[0] if rows else None
+
+    def update_failed_event(self, event_id, data):
+        return self._update(self.FAILED_TABLE, event_id, data)

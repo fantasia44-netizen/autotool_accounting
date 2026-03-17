@@ -6,6 +6,26 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 
+def _log_fee_safe(billing_repo, data, dedupe_key=None):
+    """중복방지 과금 기록. dedupe_key가 있으면 중복 체크 후 insert.
+
+    Returns:
+        inserted/existing row dict.
+    """
+    if dedupe_key:
+        data['dedupe_key'] = dedupe_key
+        existing = billing_repo.find_by_dedupe_key(data['client_id'], dedupe_key)
+        if existing:
+            logger.info('중복 과금 스킵: %s', dedupe_key)
+            return existing
+    return billing_repo.log_fee(data)
+
+
+def _minute_ts():
+    """현재 시각을 분 단위로 truncate한 문자열 반환."""
+    return datetime.now(timezone.utc).strftime('%Y%m%d%H%M')
+
+
 def _log_billing_failure(billing_repo, client_id, event_type, event_data, error):
     """과금 실패 시 failed_billing_events에 기록 (DLQ).
 
@@ -56,50 +76,81 @@ def _check_invoice_open(billing_repo, client_id, year_month):
     return year_month
 
 
-def record_inbound_fee(billing_repo, rate_repo, client_id, quantity=1, memo=''):
+def record_inbound_fee(billing_repo, rate_repo, client_id, quantity=1, memo='',
+                       sku_id=None):
     """입고 시 입고비 자동 기록."""
     try:
         rates = _get_client_rates_by_category(rate_repo, client_id, 'inbound')
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
+        ts_min = _minute_ts()
         for rate in rates:
             unit_price = float(rate.get('amount', 0))
-            billing_repo.log_fee({
+            fee_name = rate.get('fee_name', '입고비')
+            # dedupe: inbound:{sku_id}:{quantity}:{timestamp_minute}
+            dedupe = f"inbound:{sku_id}:{quantity}:{ts_min}" if sku_id else None
+            _log_fee_safe(billing_repo, {
                 'client_id': client_id,
                 'rate_id': rate.get('id'),
                 'year_month': year_month,
-                'fee_name': rate.get('fee_name', '입고비'),
+                'fee_name': fee_name,
                 'category': 'inbound',
                 'quantity': quantity,
                 'unit_price': unit_price,
                 'total_amount': unit_price * quantity,
                 'memo': memo,
-            })
+            }, dedupe_key=dedupe)
     except Exception as e:
         logger.exception('입고비 과금 실패: client_id=%s', client_id)
         _log_billing_failure(billing_repo, client_id, 'inbound',
                              {'quantity': quantity, 'memo': memo}, e)
 
 
-def record_outbound_fee(billing_repo, rate_repo, client_id, order_id=None, memo=''):
-    """출고 시 출고비 + 택배비 자동 기록."""
+def record_outbound_fee(billing_repo, rate_repo, client_id, order_id=None,
+                        item_count=1, total_weight_g=0, memo=''):
+    """출고 시 출고비 + 택배비 자동 기록.
+
+    Args:
+        item_count: 주문 내 품목 수 (2개 이상이면 합포장추가비 적용)
+        total_weight_g: 총 중량(g) (5kg 초과 시 중량추가비 적용)
+    """
     try:
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
         for category in ('outbound', 'courier'):
             rates = _get_client_rates_by_category(rate_repo, client_id, category)
             for rate in rates:
+                fee_name = rate.get('fee_name', '')
                 unit_price = float(rate.get('amount', 0))
-                billing_repo.log_fee({
+                if unit_price <= 0:
+                    continue
+
+                # 조건부 과금: 합포장추가비
+                if '합포장' in fee_name:
+                    if item_count < 2:
+                        continue  # 단품이면 스킵
+                    qty = item_count - 1  # 추가 품목 수만큼
+                # 조건부 과금: 중량추가비
+                elif '중량' in fee_name:
+                    extra_kg = (total_weight_g - 5000) / 1000 if total_weight_g > 5000 else 0
+                    if extra_kg <= 0:
+                        continue
+                    qty = int(extra_kg) + (1 if extra_kg % 1 > 0 else 0)  # 올림
+                else:
+                    qty = 1
+
+                # dedupe: outbound:{order_id}:{category}:{fee_name}
+                dedupe = f"outbound:{order_id}:{category}:{fee_name}" if order_id else None
+                _log_fee_safe(billing_repo, {
                     'client_id': client_id,
                     'rate_id': rate.get('id'),
                     'order_id': order_id,
                     'year_month': year_month,
-                    'fee_name': rate.get('fee_name'),
+                    'fee_name': fee_name,
                     'category': category,
-                    'quantity': 1,
+                    'quantity': qty,
                     'unit_price': unit_price,
-                    'total_amount': unit_price,
+                    'total_amount': unit_price * qty,
                     'memo': memo,
-                })
+                }, dedupe_key=dedupe)
     except Exception as e:
         logger.exception('출고비 과금 실패: client_id=%s, order_id=%s', client_id, order_id)
         _log_billing_failure(billing_repo, client_id, 'outbound',
@@ -120,7 +171,9 @@ def record_packing_fee(billing_repo, rate_repo, client_id, order_id=None,
             if qty <= 0:
                 continue
             unit_price = float(rate.get('amount', 0))
-            billing_repo.log_fee({
+            # dedupe: packing:{order_id}:{fee_name}
+            dedupe = f"packing:{order_id}:{fee_name}" if order_id else None
+            _log_fee_safe(billing_repo, {
                 'client_id': client_id,
                 'rate_id': rate.get('id'),
                 'order_id': order_id,
@@ -131,35 +184,81 @@ def record_packing_fee(billing_repo, rate_repo, client_id, order_id=None,
                 'unit_price': unit_price,
                 'total_amount': unit_price * qty,
                 'memo': memo,
-            })
+            }, dedupe_key=dedupe)
     except Exception as e:
         logger.exception('부자재비 과금 실패: client_id=%s, order_id=%s', client_id, order_id)
         _log_billing_failure(billing_repo, client_id, 'material',
                              {'order_id': order_id, 'materials': materials, 'memo': memo}, e)
 
 
-def record_return_fee(billing_repo, rate_repo, client_id, memo=''):
-    """반품 시 반품비 기록."""
+def record_return_fee(billing_repo, rate_repo, client_id, quantity=1, memo=''):
+    """반품 시 반품비 기록. quantity: 반품 수량."""
     try:
         rates = _get_client_rates_by_category(rate_repo, client_id, 'return')
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
+        ts_min = _minute_ts()
         for rate in rates:
             unit_price = float(rate.get('amount', 0))
-            billing_repo.log_fee({
+            if unit_price <= 0:
+                continue
+            fee_name = rate.get('fee_name', '반품비')
+            # 반품검수비는 수량 기반, 반품수수료는 건당
+            qty = quantity if '검수' in fee_name else 1
+            # dedupe: return:{client_id}:{timestamp_minute}:{fee_name}
+            dedupe = f"return:{client_id}:{ts_min}:{fee_name}"
+            _log_fee_safe(billing_repo, {
                 'client_id': client_id,
                 'rate_id': rate.get('id'),
                 'year_month': year_month,
-                'fee_name': rate.get('fee_name', '반품비'),
+                'fee_name': fee_name,
                 'category': 'return',
-                'quantity': 1,
+                'quantity': qty,
                 'unit_price': unit_price,
-                'total_amount': unit_price,
+                'total_amount': unit_price * qty,
                 'memo': memo,
-            })
+            }, dedupe_key=dedupe)
     except Exception as e:
         logger.exception('반품비 과금 실패: client_id=%s', client_id)
         _log_billing_failure(billing_repo, client_id, 'return',
-                             {'memo': memo}, e)
+                             {'quantity': quantity, 'memo': memo}, e)
+
+
+def record_vas_fee(billing_repo, rate_repo, client_id, vas_name, quantity=1,
+                   order_id=None, memo=''):
+    """VAS(부가서비스) 수동 과금. vas_name: 라벨부착/키팅/사진촬영 등."""
+    try:
+        rates = _get_client_rates_by_category(rate_repo, client_id, 'vas')
+        year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
+        matched = None
+        for rate in rates:
+            if rate.get('fee_name') == vas_name:
+                matched = rate
+                break
+        if not matched:
+            logger.warning('VAS 요금표 미등록: client=%s, vas=%s', client_id, vas_name)
+            return
+        unit_price = float(matched.get('amount', 0))
+        if unit_price <= 0:
+            return
+        # dedupe: vas:{client_id}:{vas_name}:{timestamp_minute}
+        ts_min = _minute_ts()
+        dedupe = f"vas:{client_id}:{vas_name}:{ts_min}"
+        _log_fee_safe(billing_repo, {
+            'client_id': client_id,
+            'rate_id': matched.get('id'),
+            'order_id': order_id,
+            'year_month': year_month,
+            'fee_name': vas_name,
+            'category': 'vas',
+            'quantity': quantity,
+            'unit_price': unit_price,
+            'total_amount': unit_price * quantity,
+            'memo': memo,
+        }, dedupe_key=dedupe)
+    except Exception as e:
+        logger.exception('VAS 과금 실패: client_id=%s, vas=%s', client_id, vas_name)
+        _log_billing_failure(billing_repo, client_id, 'vas',
+                             {'vas_name': vas_name, 'quantity': quantity, 'memo': memo}, e)
 
 
 def _get_month_days(year_month):
@@ -173,6 +272,7 @@ def _match_storage_rate(rates, storage_temp):
     """온도구간에 맞는 보관비 rate 찾기. 없으면 첫번째(일반) 반환."""
     temp_keywords = {
         'cold': ['냉장'],
+        'chilled': ['냉장'],     # DB에 chilled로 저장된 경우
         'frozen': ['냉동'],
         'ambient': ['일반', '상온'],
     }
@@ -184,12 +284,33 @@ def _match_storage_rate(rates, storage_temp):
     return rates[0] if rates else None
 
 
-def calculate_storage_fee(billing_repo, rate_repo, inv_repo, client_id, year_month):
-    """월말 보관비 일괄 계산 — 온도구간별 분리 + 실제일수."""
+def calculate_storage_fee(billing_repo, rate_repo, inv_repo, client_id, year_month,
+                          force=False):
+    """월말 보관비 일괄 계산 — 온도구간별 분리 + 실제일수.
+
+    Args:
+        force: True이면 기존 보관비 삭제 후 재계산.
+    """
     try:
+        # 중복 계산 방지
+        existing = billing_repo.list_fees(client_id, year_month=year_month, category='storage')
+        if existing and not force:
+            logger.info('보관비 이미 계산됨: client=%s, month=%s (%d건)',
+                        client_id, year_month, len(existing))
+            return {'status': 'already_calculated', 'count': len(existing)}
+        if existing and force:
+            # 기존 보관비 로그 삭제 후 재계산
+            for fee in existing:
+                try:
+                    billing_repo.delete_fee(fee['id'])
+                except Exception:
+                    pass
+            logger.info('보관비 재계산: client=%s, month=%s (기존 %d건 삭제)',
+                        client_id, year_month, len(existing))
+
         rates = _get_client_rates_by_category(rate_repo, client_id, 'storage')
         if not rates:
-            return
+            return {'status': 'no_rates'}
         days = _get_month_days(year_month)
 
         # SKU별 재고를 온도구간별로 합산
@@ -212,23 +333,28 @@ def calculate_storage_fee(billing_repo, rate_repo, inv_repo, client_id, year_mon
                 continue
             unit_price = float(rate.get('amount', 0))
             total = unit_price * total_qty * days
-            temp_label = {'ambient': '상온', 'cold': '냉장', 'frozen': '냉동'}.get(
+            temp_label = {'ambient': '상온', 'cold': '냉장', 'chilled': '냉장', 'frozen': '냉동'}.get(
                 storage_temp, storage_temp)
-            billing_repo.log_fee({
+            fee_name = rate.get('fee_name', f'{temp_label}보관비')
+            # dedupe: storage:{client_id}:{year_month}:{fee_name}
+            dedupe = f"storage:{client_id}:{year_month}:{fee_name}"
+            _log_fee_safe(billing_repo, {
                 'client_id': client_id,
                 'year_month': year_month,
                 'rate_id': rate.get('id'),
-                'fee_name': rate.get('fee_name', f'{temp_label}보관비'),
+                'fee_name': fee_name,
                 'category': 'storage',
                 'quantity': total_qty * days,
                 'unit_price': unit_price,
                 'total_amount': total,
                 'memo': f'{temp_label} {total_qty}개 × {days}일',
-            })
+            }, dedupe_key=dedupe)
+        return {'status': 'ok', 'temp_qty': temp_qty, 'days': days}
     except Exception as e:
         logger.exception('보관비 과금 실패: client_id=%s, year_month=%s', client_id, year_month)
         _log_billing_failure(billing_repo, client_id, 'storage',
                              {'year_month': year_month}, e)
+        return {'status': 'error', 'error': str(e)}
 
 
 # ── 과금 프리셋 ──

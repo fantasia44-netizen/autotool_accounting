@@ -363,6 +363,45 @@
     </div>
 </div>
 
+<!-- 부자재 입력 모달 -->
+<div class="modal fade" id="materialsModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-sm modal-dialog-centered">
+        <div class="modal-content" style="border-radius:16px;">
+            <div class="modal-header py-2" style="border-bottom:1px solid #e2e8f0;">
+                <h6 class="modal-title"><i class="bi bi-box-seam me-1"></i>부자재 사용 내역</h6>
+            </div>
+            <div class="modal-body py-2">
+                <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                    <span style="font-size:0.9rem;">박스</span>
+                    <input type="number" class="form-control form-control-sm mat-qty" data-material="박스" data-default="1" value="1" min="0" style="width:70px; text-align:center;">
+                </div>
+                <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                    <span style="font-size:0.9rem;">아이스팩</span>
+                    <input type="number" class="form-control form-control-sm mat-qty" data-material="아이스팩" data-default="0" value="0" min="0" style="width:70px; text-align:center;">
+                </div>
+                <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                    <span style="font-size:0.9rem;">드라이아이스</span>
+                    <input type="number" class="form-control form-control-sm mat-qty" data-material="드라이아이스" data-default="0" value="0" min="0" style="width:70px; text-align:center;">
+                </div>
+                <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                    <span style="font-size:0.9rem;">완충재</span>
+                    <input type="number" class="form-control form-control-sm mat-qty" data-material="완충재" data-default="0" value="0" min="0" style="width:70px; text-align:center;">
+                </div>
+                <div class="d-flex justify-content-between align-items-center py-2">
+                    <span style="font-size:0.9rem;">테이프</span>
+                    <input type="number" class="form-control form-control-sm mat-qty" data-material="테이프" data-default="1" value="1" min="0" style="width:70px; text-align:center;">
+                </div>
+            </div>
+            <div class="modal-footer py-2 d-flex gap-2" style="border-top:1px solid #e2e8f0;">
+                <button type="button" class="btn btn-sm btn-outline-secondary flex-fill" id="matSkipBtn">건너뛰기</button>
+                <button type="button" class="btn btn-sm btn-primary flex-fill" id="matConfirmBtn">
+                    <i class="bi bi-check-lg me-1"></i>확인
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 // ── CSRF 토큰 ──
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -773,20 +812,59 @@ async function stopRecording() {
         scanned_qty: p.scannedQty,
     }));
 
+    // 부자재 입력 모달 표시
+    const materials = await showMaterialsModal();
+
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         return new Promise((resolve) => {
             mediaRecorder.onstop = async () => {
-                await _uploadAndFinish(durationMs, scannedInfo);
+                await _uploadAndFinish(durationMs, scannedInfo, materials);
                 resolve();
             };
             mediaRecorder.stop();
         });
     } else {
-        await _completeJobNoVideo(durationMs, scannedInfo);
+        await _completeJobNoVideo(durationMs, scannedInfo, materials);
     }
 }
 
-async function _uploadAndFinish(durationMs, scannedInfo) {
+// ── 부자재 입력 모달 ──
+function showMaterialsModal() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('materialsModal');
+        if (!modal) { resolve({}); return; }
+        // 수량 초기화
+        modal.querySelectorAll('.mat-qty').forEach(inp => inp.value = inp.dataset.default || '0');
+        // 박스 기본값 1
+        const boxInput = modal.querySelector('[data-material="박스"]');
+        if (boxInput) boxInput.value = '1';
+
+        const bsModal = new bootstrap.Modal(modal);
+        const confirmBtn = modal.querySelector('#matConfirmBtn');
+        const skipBtn = modal.querySelector('#matSkipBtn');
+
+        function collect() {
+            const result = {};
+            modal.querySelectorAll('.mat-qty').forEach(inp => {
+                const qty = parseInt(inp.value) || 0;
+                if (qty > 0) result[inp.dataset.material] = qty;
+            });
+            return result;
+        }
+        function cleanup() {
+            confirmBtn.removeEventListener('click', onConfirm);
+            skipBtn.removeEventListener('click', onSkip);
+        }
+        function onConfirm() { cleanup(); bsModal.hide(); resolve(collect()); }
+        function onSkip() { cleanup(); bsModal.hide(); resolve({}); }
+
+        confirmBtn.addEventListener('click', onConfirm);
+        skipBtn.addEventListener('click', onSkip);
+        bsModal.show();
+    });
+}
+
+async function _uploadAndFinish(durationMs, scannedInfo, materials) {
     const blob = new Blob(recordedChunks, {type:'video/webm'});
     const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
     $uploadOverlay.classList.add('active');
@@ -797,6 +875,7 @@ async function _uploadAndFinish(durationMs, scannedInfo) {
     formData.append('job_id', currentJobId);
     formData.append('duration_ms', durationMs);
     formData.append('scanned_items', JSON.stringify(scannedInfo));
+    formData.append('materials', JSON.stringify(materials || {}));
     formData.append('csrf_token', csrfToken);
 
     try {
@@ -828,7 +907,7 @@ async function _uploadAndFinish(durationMs, scannedInfo) {
     _afterComplete();
 }
 
-async function _completeJobNoVideo(durationMs, scannedInfo) {
+async function _completeJobNoVideo(durationMs, scannedInfo, materials) {
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000);
@@ -839,6 +918,7 @@ async function _completeJobNoVideo(durationMs, scannedInfo) {
                 job_id: currentJobId,
                 duration_ms: durationMs,
                 scanned_items: scannedInfo,
+                materials: materials || {},
             }),
             signal: controller.signal,
         });

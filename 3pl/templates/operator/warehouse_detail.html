@@ -164,14 +164,50 @@
         {% if locations %}
         <table class="table table-compact mb-0">
             <thead>
-                <tr><th>코드</th><th>유형</th><th>메모</th></tr>
+                <tr><th>코드</th><th>유형</th><th>메모</th><th style="width:140px;">관리</th></tr>
             </thead>
             <tbody>
                 {% for loc in locations %}
-                <tr>
+                <tr id="locRow{{ loc.id }}">
                     <td class="fw-semibold" style="font-family:monospace;">{{ loc.code }}</td>
                     <td><span class="status-badge status-neutral">{{ loc.location_type or 'shelf' }}</span></td>
                     <td class="text-muted">{{ loc.memo or '-' }}</td>
+                    <td>
+                        <button class="btn btn-outline-secondary btn-sm py-0 px-1" onclick="document.getElementById('locEdit{{ loc.id }}').classList.toggle('d-none')" title="수정">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <form method="post" action="{{ url_for('operator.location_deactivate', wh_id=warehouse.id, loc_id=loc.id) }}" class="d-inline" onsubmit="return confirm('로케이션 {{ loc.code }}을(를) 비활성화하시겠습니까?')">
+                            <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1" title="비활성화">
+                                <i class="bi bi-x-circle"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                <!-- 인라인 수정 폼 -->
+                <tr id="locEdit{{ loc.id }}" class="d-none">
+                    <td colspan="4" style="background:#f8fafc;">
+                        <form method="post" action="{{ url_for('operator.location_update', wh_id=warehouse.id, loc_id=loc.id) }}">
+                            <div class="row g-2 align-items-end">
+                                <div class="col-md-3">
+                                    <input type="text" name="code" class="form-control form-control-sm" value="{{ loc.code }}" required>
+                                </div>
+                                <div class="col-md-2">
+                                    <select name="location_type" class="form-select form-select-sm">
+                                        {% for val, label in [('shelf','선반'),('floor','바닥'),('rack','랙'),('pallet','팔레트')] %}
+                                        <option value="{{ val }}" {% if loc.location_type == val %}selected{% endif %}>{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <input type="text" name="memo" class="form-control form-control-sm" value="{{ loc.memo or '' }}">
+                                </div>
+                                <div class="col-md-3 d-flex gap-1">
+                                    <button type="submit" class="btn btn-primary btn-sm">저장</button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('locEdit{{ loc.id }}').classList.add('d-none')">취소</button>
+                                </div>
+                            </div>
+                        </form>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

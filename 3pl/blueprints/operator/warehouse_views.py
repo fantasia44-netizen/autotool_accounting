@@ -102,8 +102,34 @@ def location_create(wh_id):
     from db_utils import get_repo
     repo = get_repo('warehouse')
     zone_id = request.form.get('zone_id', type=int)
+    code = request.form.get('code', '').strip()
     data = {
         'zone_id': zone_id,
+        'code': code,
+        'location_type': request.form.get('location_type', 'shelf'),
+        'memo': request.form.get('memo', '').strip(),
+    }
+    if not code:
+        flash('로케이션 코드를 입력해주세요.', 'warning')
+        return redirect(url_for('operator.warehouse_detail', wh_id=wh_id))
+    # 같은 zone 내 코드 중복 검사
+    existing = repo.list_locations(zone_id)
+    if any(loc['code'] == code for loc in existing):
+        flash(f'로케이션 코드 "{code}"가 이미 존재합니다.', 'warning')
+        return redirect(url_for('operator.warehouse_detail', wh_id=wh_id))
+    repo.create_location(data)
+    flash(f'로케이션 "{code}" 추가 완료', 'success')
+    return redirect(url_for('operator.warehouse_detail', wh_id=wh_id))
+
+
+@operator_bp.route('/warehouses/<int:wh_id>/locations/<int:loc_id>/update', methods=['POST'])
+@login_required
+@_require_operator
+def location_update(wh_id, loc_id):
+    """로케이션 수정."""
+    from db_utils import get_repo
+    repo = get_repo('warehouse')
+    data = {
         'code': request.form.get('code', '').strip(),
         'location_type': request.form.get('location_type', 'shelf'),
         'memo': request.form.get('memo', '').strip(),
@@ -111,6 +137,18 @@ def location_create(wh_id):
     if not data['code']:
         flash('로케이션 코드를 입력해주세요.', 'warning')
         return redirect(url_for('operator.warehouse_detail', wh_id=wh_id))
-    repo.create_location(data)
-    flash(f'로케이션 "{data["code"]}" 추가 완료', 'success')
+    repo.update_location(loc_id, data)
+    flash(f'로케이션 "{data["code"]}" 수정 완료', 'success')
+    return redirect(url_for('operator.warehouse_detail', wh_id=wh_id))
+
+
+@operator_bp.route('/warehouses/<int:wh_id>/locations/<int:loc_id>/deactivate', methods=['POST'])
+@login_required
+@_require_operator
+def location_deactivate(wh_id, loc_id):
+    """로케이션 비활성화 (soft delete)."""
+    from db_utils import get_repo
+    repo = get_repo('warehouse')
+    repo.update_location(loc_id, {'is_active': False})
+    flash('로케이션이 비활성화되었습니다.', 'success')
     return redirect(url_for('operator.warehouse_detail', wh_id=wh_id))

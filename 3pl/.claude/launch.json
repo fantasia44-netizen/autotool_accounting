@@ -5,7 +5,7 @@
       "name": "3pl-app",
       "runtimeExecutable": "python",
       "runtimeArgs": ["wsgi.py"],
-      "port": 5000
+      "port": 5003
     }
   ]
 }
