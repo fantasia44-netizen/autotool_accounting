@@ -57,10 +57,12 @@ class PickingRepository(BaseRepository):
     def get_items(self, list_id):
         return self._query(self.ITEM_TABLE,
                            filters=[('picking_list_id', 'eq', list_id)],
-                           order_by='location_code', order_desc=False)
+                           order_by='location_code', order_desc=False,
+                           skip_tenant=True)
 
     def get_item(self, item_id):
-        rows = self._query(self.ITEM_TABLE, filters=[('id', 'eq', item_id)])
+        rows = self._query(self.ITEM_TABLE, filters=[('id', 'eq', item_id)],
+                           skip_tenant=True)
         return rows[0] if rows else None
 
     def update_item(self, item_id, data):

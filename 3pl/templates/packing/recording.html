@@ -364,6 +364,9 @@
 </div>
 
 <script>
+// ── CSRF 토큰 ──
+const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 // ── 상태 관리 ──
 const State = { IDLE: 'IDLE', RECORDING: 'RECORDING', COMPLETING: 'COMPLETING' };
 
@@ -463,7 +466,7 @@ async function lookupAndStartRecording(barcode) {
     try {
         const res = await fetch('/packing/api/lookup-barcode', {
             method: 'POST',
-            headers: {'Content-Type':'application/json'},
+            headers: {'Content-Type':'application/json', 'X-CSRFToken': csrfToken},
             body: JSON.stringify({barcode}),
         });
         const json = await res.json();
@@ -531,7 +534,7 @@ async function validateProductScan(barcode) {
     try {
         const res = await fetch('/packing/api/validate-product-scan', {
             method: 'POST',
-            headers: {'Content-Type':'application/json'},
+            headers: {'Content-Type':'application/json', 'X-CSRFToken': csrfToken},
             body: JSON.stringify({
                 barcode: barcode,
                 order_items: orderItemsForValidation,
@@ -685,7 +688,7 @@ async function startRecording() {
     try {
         const res = await fetch('/packing/api/start-job', {
             method: 'POST',
-            headers: {'Content-Type':'application/json'},
+            headers: {'Content-Type':'application/json', 'X-CSRFToken': csrfToken},
             body: JSON.stringify({
                 barcode: currentBarcode,
                 ...currentOrderData,
@@ -794,12 +797,14 @@ async function _uploadAndFinish(durationMs, scannedInfo) {
     formData.append('job_id', currentJobId);
     formData.append('duration_ms', durationMs);
     formData.append('scanned_items', JSON.stringify(scannedInfo));
+    formData.append('csrf_token', csrfToken);
 
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 60000);
         const res = await fetch('/packing/api/complete-job', {
             method: 'POST',
+            headers: {'X-CSRFToken': csrfToken},
             body: formData,
             signal: controller.signal,
         });
@@ -829,7 +834,7 @@ async function _completeJobNoVideo(durationMs, scannedInfo) {
         const timeoutId = setTimeout(() => controller.abort(), 30000);
         const res = await fetch('/packing/api/complete-job-no-video', {
             method: 'POST',
-            headers: {'Content-Type':'application/json'},
+            headers: {'Content-Type':'application/json', 'X-CSRFToken': csrfToken},
             body: JSON.stringify({
                 job_id: currentJobId,
                 duration_ms: durationMs,

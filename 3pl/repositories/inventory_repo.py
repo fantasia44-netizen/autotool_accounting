@@ -50,14 +50,18 @@ class InventoryRepository(BaseRepository):
     # ── 재고 ──
 
     def get_stock(self, sku_id, location_id, lot_number=None):
-        filters = [
-            ('sku_id', 'eq', sku_id),
-            ('location_id', 'eq', location_id),
-        ]
+        # location_id=None이면 is.null 필터 사용 (PostgREST 호환)
+        q = self.client.table(self.STOCK_TABLE).select('*')
+        q = self._apply_tenant_filter(q)
+        q = q.eq('sku_id', sku_id)
+        if location_id is None:
+            q = q.is_('location_id', 'null')
+        else:
+            q = q.eq('location_id', location_id)
         if lot_number:
-            filters.append(('lot_number', 'eq', lot_number))
-        rows = self._query(self.STOCK_TABLE, filters=filters)
-        return rows[0] if rows else None
+            q = q.eq('lot_number', lot_number)
+        res = q.execute()
+        return res.data[0] if res.data else None
 
     def list_stock(self, sku_id=None, location_id=None):
         filters = []

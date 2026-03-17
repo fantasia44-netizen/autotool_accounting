@@ -8,6 +8,10 @@ os.chdir(app_dir)
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
 
+# .env 로드
+from dotenv import load_dotenv
+load_dotenv(os.path.join(app_dir, '.env'))
+
 from app import create_app
 
 app = create_app()

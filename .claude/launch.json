@@ -4,14 +4,8 @@
     {
       "name": "3pl-app",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["3pl/wsgi.py"],
-      "port": 5000
-    },
-    {
-      "name": "3pl-landing",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8080", "--directory", "C:\\autotool_git\\3pl\\templates\\landing"],
-      "port": 8080
+      "runtimeArgs": ["-c", "import os; os.chdir(r'C:\\autotool_accounting\\3pl'); exec(open('wsgi.py').read())"],
+      "port": 5003
     }
   ]
 }

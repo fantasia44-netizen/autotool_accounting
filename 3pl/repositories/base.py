@@ -1,6 +1,11 @@
 """Base Repository — Supabase 공통 CRUD + 연결 관리."""
 import time
 
+# soft delete 컬럼(is_deleted)이 있는 테이블 목록
+SOFT_DELETE_TABLES = frozenset({
+    'clients', 'client_rates', 'client_marketplace_credentials', 'skus',
+})
+
 try:
     from supabase import create_client, Client
 except ImportError:
@@ -49,16 +54,21 @@ class BaseRepository:
     # ── 공통 CRUD 헬퍼 ──
 
     def _query(self, table, columns='*', filters=None, order_by=None,
-               order_desc=True, limit=None, include_deleted=False):
+               order_desc=True, limit=None, include_deleted=False,
+               skip_tenant=False):
         """범용 조회. filters: [(col, op, val), ...]"""
         q = self.client.table(table).select(columns)
-        q = self._apply_tenant_filter(q)
-        if not include_deleted:
+        if not skip_tenant:
+            q = self._apply_tenant_filter(q)
+        if not include_deleted and table in SOFT_DELETE_TABLES:
             q = q.or_('is_deleted.is.null,is_deleted.eq.false')
         if filters:
             for col, op, val in filters:
                 if op == 'eq':
-                    q = q.eq(col, val)
+                    if val is None:
+                        q = q.is_(col, 'null')
+                    else:
+                        q = q.eq(col, val)
                 elif op == 'gte':
                     q = q.gte(col, val)
                 elif op == 'lte':
@@ -74,9 +84,13 @@ class BaseRepository:
         res = q.execute()
         return res.data or []
 
+    # operator_id 컬럼이 없는 자식 테이블 (부모 FK로 이미 테넌트 분리됨)
+    NO_TENANT_TABLES = frozenset({'order_items', 'picking_list_items'})
+
     def _insert(self, table, payload):
         """단건 삽입. Returns inserted row."""
-        if self.operator_id and 'operator_id' not in payload:
+        if self.operator_id and 'operator_id' not in payload \
+                and table not in self.NO_TENANT_TABLES:
             payload['operator_id'] = self.operator_id
         res = self.client.table(table).insert(payload).execute()
         return res.data[0] if res.data else None
@@ -84,7 +98,8 @@ class BaseRepository:
     def _update(self, table, record_id, payload):
         """ID 기반 업데이트 (테넌트 필터 적용)."""
         q = self.client.table(table).update(payload).eq('id', record_id)
-        q = self._apply_tenant_filter(q)
+        if table not in self.NO_TENANT_TABLES:
+            q = self._apply_tenant_filter(q)
         res = q.execute()
         return res.data[0] if res.data else None
 

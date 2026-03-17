@@ -42,7 +42,8 @@ class OrderRepository(BaseRepository):
 
     def get_order_items(self, order_id):
         return self._query(self.ORDER_ITEM_TABLE,
-                           filters=[('order_id', 'eq', order_id)])
+                           filters=[('order_id', 'eq', order_id)],
+                           skip_tenant=True)
 
     def create_order(self, order_data, items):
         order = self._insert(self.ORDER_TABLE, order_data)

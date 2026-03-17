@@ -56,7 +56,10 @@ function scanBarcode() {
 
     fetch('{{ url_for("packing.scan") }}', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
+        },
         body: JSON.stringify({barcode: barcode})
     })
     .then(r => r.json())

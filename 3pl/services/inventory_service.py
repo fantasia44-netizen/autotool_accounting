@@ -122,8 +122,7 @@ def commit_stock(inv_repo, order_id):
             'lot_number': lot_number,
             'movement_type': 'outbound',
             'quantity': -qty,
-            'reference_type': 'order',
-            'reference_id': order_id,
+            'order_id': order_id,
             'memo': f'패킹완료 출고 (주문#{order_id})',
         })
 
