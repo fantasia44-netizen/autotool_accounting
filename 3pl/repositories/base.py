@@ -163,11 +163,13 @@ class BaseRepository:
 
     def _update(self, table, record_id, payload):
         """ID 기반 업데이트 + 감사 로그 (before/after 스냅샷)."""
-        # before 스냅샷 조회
+        # before 스냅샷 조회 (tenant 필터 적용)
         before = None
         if table not in AUDIT_EXCLUDE_TABLES:
             try:
                 q = self.client.table(table).select('*').eq('id', record_id)
+                if table not in self.NO_TENANT_TABLES:
+                    q = self._apply_tenant_filter(q)
                 res = q.execute()
                 before = res.data[0] if res.data else None
             except Exception:
@@ -195,10 +197,12 @@ class BaseRepository:
         except ImportError:
             ts = datetime.now(timezone.utc).isoformat()
 
-        # before 스냅샷
+        # before 스냅샷 (tenant 필터 적용)
         before = None
         try:
             q = self.client.table(table).select('*').eq('id', record_id)
+            if table not in self.NO_TENANT_TABLES:
+                q = self._apply_tenant_filter(q)
             res = q.execute()
             before = res.data[0] if res.data else None
         except Exception:
@@ -234,10 +238,41 @@ class BaseRepository:
         self._audit_log('delete', table, record_id=record_id,
                         before_data=before, memo='hard_delete')
 
+    # 부모-자식 관계 (복원 시 부모 존재 검증용)
+    _PARENT_REFS = {
+        'skus': ('clients', 'client_id'),
+        'orders': ('clients', 'client_id'),
+        'shipments': ('orders', 'order_id'),
+        'client_rates': ('clients', 'client_id'),
+        'client_billing_logs': ('clients', 'client_id'),
+        'client_invoices': ('clients', 'client_id'),
+        'client_marketplace_credentials': ('clients', 'client_id'),
+        'picking_lists': ('orders', None),  # order_id 없을 수 있음
+    }
+
     def _restore(self, table, record_id):
-        """soft delete된 레코드 복원."""
+        """soft delete된 레코드 복원 (부모 참조 무결성 검증 포함)."""
         if table not in SOFT_DELETE_TABLES:
             return None
+
+        # 부모 테이블 존재 확인
+        parent_ref = self._PARENT_REFS.get(table)
+        if parent_ref:
+            parent_table, fk_col = parent_ref
+            if fk_col:
+                # 복원 대상 레코드 조회 (삭제된 상태이므로 include_deleted=True)
+                record = self._query(table, filters=[('id', 'eq', record_id)],
+                                     include_deleted=True)
+                if record and record[0].get(fk_col):
+                    parent_id = record[0][fk_col]
+                    parent = self._query(parent_table,
+                                         filters=[('id', 'eq', parent_id)])
+                    if not parent:
+                        raise ValueError(
+                            f'부모 레코드가 삭제된 상태입니다 '
+                            f'({parent_table} id={parent_id}). '
+                            f'부모를 먼저 복원하세요.')
+
         q = self.client.table(table).update({
             'is_deleted': False,
             'deleted_at': None,

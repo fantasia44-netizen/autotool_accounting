@@ -22,25 +22,20 @@ EXPENSE_CATEGORIES = {
 }
 
 
-def calculate_monthly_pnl(billing_repo, finance_repo, year_month):
+def calculate_monthly_pnl(billing_repo, finance_repo, year_month,
+                          client_repo=None):
     """월별 손익계산서 생성/업데이트.
 
     Args:
         billing_repo: ClientBillingRepository
         finance_repo: FinanceRepository
         year_month: 'YYYY-MM'
+        client_repo: ClientRepository (삭제 고객 필터용, 선택)
 
     Returns:
         dict: P&L 요약
     """
     # ── 매출: 전체 고객사 과금 합계 ──
-    # billing_repo에서 전체 operator의 과금 로그 조회
-    billing_rows = billing_repo.list_fees(
-        client_id=None,  # 전체
-        year_month=year_month,
-    ) if hasattr(billing_repo, 'list_all_fees') else []
-
-    # list_fees는 client_id 필수이므로, 전체 조회는 별도 쿼리
     try:
         all_billing = billing_repo._query(
             billing_repo.LOG_TABLE,
@@ -49,6 +44,20 @@ def calculate_monthly_pnl(billing_repo, finance_repo, year_month):
         )
     except Exception:
         all_billing = []
+
+    # 삭제된 고객사 과금 제외
+    if client_repo:
+        try:
+            active_clients = client_repo.list_clients() or []
+            active_ids = {c['id'] for c in active_clients}
+            excluded = len([b for b in all_billing if b.get('client_id') not in active_ids])
+            all_billing = [b for b in all_billing if b.get('client_id') in active_ids]
+            if excluded:
+                import logging
+                logging.getLogger(__name__).info(
+                    'P&L %s: 삭제 고객 과금 %d건 제외', year_month, excluded)
+        except Exception:
+            pass  # 필터 실패 시 전체 포함 (안전 우선)
 
     revenue_by_cat = {}
     revenue_total = 0
