@@ -39,6 +39,10 @@ def create_app(config_class=None):
     _register_blueprints(app)
     _register_hooks(app)
 
+    # CLI 커맨드 등록 (flask storage-calc 등)
+    from cli_commands import register_commands
+    register_commands(app)
+
     # 랜딩 페이지 (비로그인 시) / 포털 리다이렉트 (로그인 시)
     @app.route('/')
     def index():

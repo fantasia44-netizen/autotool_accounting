@@ -6,6 +6,26 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 
+def _is_client_active(client_id):
+    """고객사가 활성(삭제되지 않은) 상태인지 확인. 삭제/비활성이면 과금 차단."""
+    try:
+        from db_utils import get_repo
+        client = get_repo('client').get_client(client_id)
+        if not client:
+            logger.warning('과금 차단: 존재하지 않는 고객사 client_id=%s', client_id)
+            return False
+        if client.get('is_deleted'):
+            logger.warning('과금 차단: 삭제된 고객사 client_id=%s', client_id)
+            return False
+        if not client.get('is_active', True):
+            logger.warning('과금 차단: 비활성 고객사 client_id=%s', client_id)
+            return False
+        return True
+    except Exception:
+        logger.exception('고객사 활성 상태 확인 실패: client_id=%s', client_id)
+        return True  # 확인 실패 시 안전하게 통과 (과금 누락보다 나음)
+
+
 def _log_fee_safe(billing_repo, data, dedupe_key=None):
     """중복방지 과금 기록. dedupe_key가 있으면 중복 체크 후 insert.
 
@@ -79,6 +99,8 @@ def _check_invoice_open(billing_repo, client_id, year_month):
 def record_inbound_fee(billing_repo, rate_repo, client_id, quantity=1, memo='',
                        sku_id=None):
     """입고 시 입고비 자동 기록."""
+    if not _is_client_active(client_id):
+        return
     try:
         rates = _get_client_rates_by_category(rate_repo, client_id, 'inbound')
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
@@ -113,6 +135,8 @@ def record_outbound_fee(billing_repo, rate_repo, client_id, order_id=None,
         item_count: 주문 내 품목 수 (2개 이상이면 합포장추가비 적용)
         total_weight_g: 총 중량(g) (5kg 초과 시 중량추가비 적용)
     """
+    if not _is_client_active(client_id):
+        return
     try:
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
         for category in ('outbound', 'courier'):
@@ -160,6 +184,8 @@ def record_outbound_fee(billing_repo, rate_repo, client_id, order_id=None,
 def record_packing_fee(billing_repo, rate_repo, client_id, order_id=None,
                        materials=None, memo=''):
     """패킹 시 부자재비 기록. materials: dict {material_name: qty}"""
+    if not _is_client_active(client_id):
+        return
     try:
         rates = _get_client_rates_by_category(rate_repo, client_id, 'material')
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
@@ -193,6 +219,8 @@ def record_packing_fee(billing_repo, rate_repo, client_id, order_id=None,
 
 def record_return_fee(billing_repo, rate_repo, client_id, quantity=1, memo=''):
     """반품 시 반품비 기록. quantity: 반품 수량."""
+    if not _is_client_active(client_id):
+        return
     try:
         rates = _get_client_rates_by_category(rate_repo, client_id, 'return')
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
@@ -226,6 +254,8 @@ def record_return_fee(billing_repo, rate_repo, client_id, quantity=1, memo=''):
 def record_vas_fee(billing_repo, rate_repo, client_id, vas_name, quantity=1,
                    order_id=None, memo=''):
     """VAS(부가서비스) 수동 과금. vas_name: 라벨부착/키팅/사진촬영 등."""
+    if not _is_client_active(client_id):
+        return
     try:
         rates = _get_client_rates_by_category(rate_repo, client_id, 'vas')
         year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())

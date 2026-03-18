@@ -18,6 +18,14 @@
             <button class="btn btn-sm btn-outline-secondary" onclick="toggleEditForm()">
                 <i class="bi bi-pencil"></i> 수정
             </button>
+            {% if current_user.is_admin() %}
+            <form method="post" action="{{ url_for('operator.client_delete', client_id=client.id) }}"
+                  onsubmit="return confirm('정말 삭제하시겠습니까?\n연관된 SKU, 요금표, 마켓플레이스 연동도 함께 삭제됩니다.\n(주문/출고/정산 이력은 보존됩니다)')">
+                <button type="submit" class="btn btn-sm btn-outline-danger">
+                    <i class="bi bi-trash"></i> 삭제
+                </button>
+            </form>
+            {% endif %}
         </div>
     </div>
     <div class="data-card-body">

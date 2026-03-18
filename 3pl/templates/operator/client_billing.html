@@ -79,6 +79,12 @@
        class="btn btn-sm btn-outline-dark">
         <i class="bi bi-file-earmark-excel me-1"></i>Excel 다운로드
     </a>
+
+    <!-- PDF 다운로드 -->
+    <a href="{{ url_for('operator.client_billing_pdf', client_id=client.id, month=year_month) }}"
+       class="btn btn-sm btn-outline-danger">
+        <i class="bi bi-file-earmark-pdf me-1"></i>PDF 다운로드
+    </a>
 </div>
 
 <!-- 상세 내역 -->

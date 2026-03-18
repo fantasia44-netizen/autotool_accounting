@@ -92,6 +92,30 @@ def client_update(client_id):
     return redirect(url_for('operator.client_detail', client_id=client_id))
 
 
+@operator_bp.route('/clients/<int:client_id>/delete', methods=['POST'])
+@login_required
+@_require_operator
+def client_delete(client_id):
+    """고객사 삭제 (soft delete + cascade)."""
+    _verify_client_owner(client_id)
+    from db_utils import get_repo
+    repo = get_repo('client')
+    client = repo.get_client(client_id)
+    if not client:
+        flash('고객사를 찾을 수 없습니다.', 'warning')
+        return redirect(url_for('operator.clients'))
+
+    # admin만 삭제 가능
+    if not current_user.is_admin():
+        flash('고객사 삭제는 관리자만 가능합니다.', 'danger')
+        return redirect(url_for('operator.client_detail', client_id=client_id))
+
+    name = client.get('name', '')
+    repo.soft_delete_client_cascade(client_id)
+    flash(f'고객사 "{name}" 및 연관 데이터가 삭제되었습니다.', 'success')
+    return redirect(url_for('operator.clients'))
+
+
 # ═══ 고객사 요금표 ═══
 
 @operator_bp.route('/clients/<int:client_id>/rates', methods=['POST'])
@@ -351,6 +375,47 @@ def client_billing_export(client_id):
     filename = f'{client.get("name", "정산")}_{year_month}_정산서.xlsx'
     return send_file(buf, download_name=filename,
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+# ═══ 정산서 PDF 다운로드 ═══
+
+@operator_bp.route('/clients/<int:client_id>/billing/pdf')
+@login_required
+@_require_operator
+def client_billing_pdf(client_id):
+    """고객사 월별 정산서 PDF 다운로드."""
+    from flask import send_file
+    from db_utils import get_repo
+    from services.client_billing_service import CATEGORY_LABELS
+    try:
+        from services.pdf_service import generate_invoice_pdf
+    except ImportError:
+        flash('PDF 생성 라이브러리(reportlab)가 설치되지 않았습니다.', 'danger')
+        return redirect(url_for('operator.client_billing', client_id=client_id))
+
+    client_repo = get_repo('client')
+    client = client_repo.get_client(client_id)
+    if not client:
+        flash('고객사를 찾을 수 없습니다.', 'warning')
+        return redirect(url_for('operator.clients'))
+
+    billing_repo = get_repo('client_billing')
+    year_month = request.args.get('month')
+    if not year_month:
+        from datetime import datetime, timezone
+        year_month = datetime.now(timezone.utc).strftime('%Y-%m')
+
+    summary = billing_repo.get_monthly_summary(client_id, year_month)
+    invoice = billing_repo.get_invoice(client_id, year_month)
+
+    pdf_buf = generate_invoice_pdf(
+        client=client,
+        year_month=year_month,
+        summary=summary,
+        invoice=invoice,
+    )
+    filename = f'{client.get("name", "정산")}_{year_month}_정산서.pdf'
+    return send_file(pdf_buf, download_name=filename, mimetype='application/pdf')
 
 
 # ═══ 보관비 수동 계산 ═══
