@@ -1,6 +1,7 @@
 """3PL SaaS — Flask Application Factory."""
 import os
-from flask import Flask, g, session
+import time
+from flask import Flask, g, session, redirect, url_for, flash, request, jsonify
 
 try:
     from supabase import create_client
@@ -135,23 +136,106 @@ def _register_blueprints(app):
 
 
 def _register_hooks(app):
-    """before_request / context_processor 등록."""
+    """before_request / after_request / errorhandler 등록."""
+    from flask_login import current_user, logout_user
+    from flask_wtf.csrf import CSRFError
+
+    # ── before_request ──
+
+    @app.before_request
+    def check_session_timeout():
+        """세션 비활동 타임아웃 — 초과 시 자동 로그아웃."""
+        if current_user.is_authenticated:
+            now = time.time()
+            last_active = session.get('_last_active', now)
+            timeout_min = app.config.get('SESSION_INACTIVITY_TIMEOUT', 60)
+            if now - last_active > timeout_min * 60:
+                logout_user()
+                session.clear()
+                if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return jsonify({'error': '세션 만료'}), 401
+                flash('비활동으로 자동 로그아웃되었습니다.', 'warning')
+                return redirect(url_for('auth.login'))
+            session['_last_active'] = now
+
+    @app.before_request
+    def enforce_https():
+        """프로덕션 HTTPS 강제 리다이렉트."""
+        if app.config.get('SESSION_COOKIE_SECURE'):
+            if request.headers.get('X-Forwarded-Proto', 'https') == 'http':
+                url = request.url.replace('http://', 'https://', 1)
+                return redirect(url, code=301)
 
     @app.before_request
     def set_tenant():
         """요청별 operator_id 기반 repository 인스턴스 주입."""
-        from flask_login import current_user
         g.operator_id = None
         if hasattr(current_user, 'operator_id') and current_user.operator_id:
             g.operator_id = current_user.operator_id
 
+    # ── after_request ──
+
     @app.after_request
     def set_utf8_headers(response):
-        """모든 HTML/JSON 응답에 UTF-8 charset 강제."""
+        """UTF-8 charset 강제 + 보안 헤더."""
         ct = response.content_type or ''
         if 'text/html' in ct and 'charset' not in ct:
             response.content_type = 'text/html; charset=utf-8'
+        # 보안 헤더
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        if current_user.is_authenticated:
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
         return response
+
+    # ── 전역 에러 핸들러 ──
+
+    def _is_api_request():
+        return (request.is_json
+                or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                or request.path.startswith('/api/'))
+
+    @app.errorhandler(400)
+    def handle_400(e):
+        if _is_api_request():
+            return jsonify({'error': '잘못된 요청입니다.'}), 400
+        flash('잘못된 요청입니다.', 'danger')
+        return redirect(request.referrer or url_for('index'))
+
+    @app.errorhandler(403)
+    def handle_403(e):
+        if _is_api_request():
+            return jsonify({'error': '접근 권한이 없습니다.'}), 403
+        flash('접근 권한이 없습니다.', 'danger')
+        return redirect(request.referrer or url_for('index'))
+
+    @app.errorhandler(404)
+    def handle_404(e):
+        # 정적 리소스는 flash 없이 처리
+        static_ext = ('.ico', '.css', '.js', '.png', '.jpg', '.gif', '.svg', '.woff', '.woff2', '.ttf', '.map')
+        if request.path.endswith(static_ext):
+            return '', 404
+        if _is_api_request():
+            return jsonify({'error': '요청한 리소스를 찾을 수 없습니다.'}), 404
+        flash('페이지를 찾을 수 없습니다.', 'warning')
+        return redirect(url_for('index'))
+
+    @app.errorhandler(500)
+    def handle_500(e):
+        if _is_api_request():
+            return jsonify({'error': '서버 내부 오류가 발생했습니다.'}), 500
+        flash('서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.', 'danger')
+        return redirect(url_for('index'))
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e):
+        if _is_api_request():
+            return jsonify({'error': '세션이 만료되었습니다. 페이지를 새로고침 해주세요.'}), 400
+        flash('세션이 만료되었습니다. 페이지를 새로고침 해주세요.', 'warning')
+        return redirect(request.referrer or url_for('auth.login'))
 
     # ── Jinja 글로벌 함수 (템플릿에서 직접 호출 가능) ──
     from services.tz_utils import now_kst, today_kst, format_kst

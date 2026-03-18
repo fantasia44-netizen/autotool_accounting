@@ -121,16 +121,20 @@ def adjustment():
         lot_number = request.form.get('lot_number', '').strip() or None
         memo = request.form.get('memo', '').strip()
 
-        inv_repo.adjust_stock(sku_id, location_id, delta, lot_number)
-        inv_repo.log_movement({
-            'sku_id': sku_id,
-            'location_id': location_id,
-            'movement_type': 'adjust',
-            'quantity': delta,
-            'lot_number': lot_number,
-            'memo': memo or '재고 조정',
-            'user_id': current_user.id,
+        # RPC 원자적 재고 조정 (동시접속 안전)
+        from services.warehouse_service import _call_rpc
+        result = _call_rpc(inv_repo, 'fn_adjust_stock', {
+            'p_operator_id': inv_repo.operator_id,
+            'p_sku_id': sku_id,
+            'p_location_id': location_id,
+            'p_delta': delta,
+            'p_lot_number': lot_number,
+            'p_memo': memo or '재고 조정',
+            'p_user_id': current_user.id,
         })
+        if not result.get('ok'):
+            flash(f"조정 실패: {result.get('error', '알 수 없는 오류')}", 'danger')
+            return redirect(url_for('operator.adjustment'))
         flash(f'재고 조정 완료 ({delta:+d})', 'success')
         return redirect(url_for('operator.adjustment'))
 

@@ -337,7 +337,15 @@ def return_create():
     })
     if location_id:
         try:
-            inv_repo.adjust_stock(sku_id, location_id, delta=quantity)
+            from services.warehouse_service import _call_rpc
+            _call_rpc(inv_repo, 'fn_adjust_stock', {
+                'p_operator_id': inv_repo.operator_id,
+                'p_sku_id': sku_id,
+                'p_location_id': location_id,
+                'p_delta': quantity,
+                'p_memo': f'반품입고: {reason}' if reason else '반품입고',
+                'p_user_id': current_user.id,
+            })
         except Exception:
             logger.exception('반품 재고 수량 반영 실패: sku_id=%s, location_id=%s', sku_id, location_id)
 
@@ -409,33 +417,38 @@ def transfer_create():
         'status': 'completed',
     })
 
-    # 출발 로케이션 재고 차감
-    if from_loc:
-        inv_repo.log_movement({
-            'sku_id': sku_id,
-            'location_id': from_loc,
-            'movement_type': 'transfer_out',
-            'quantity': -quantity,
-            'memo': f'이동출고: {reason}' if reason else '이동출고',
-            'user_id': current_user.id,
-        })
+    # RPC 원자적 창고 이동 (동시접속 안전)
+    if from_loc and to_loc:
         try:
-            inv_repo.adjust_stock(sku_id, from_loc, delta=-quantity)
+            from services.warehouse_service import process_transfer
+            process_transfer(inv_repo, sku_id, from_loc, to_loc, quantity,
+                             memo=reason or '창고이동', user_id=current_user.id)
+        except Exception:
+            logger.exception('이동 재고 반영 실패')
+    elif from_loc:
+        try:
+            from services.warehouse_service import _call_rpc
+            _call_rpc(inv_repo, 'fn_adjust_stock', {
+                'p_operator_id': inv_repo.operator_id,
+                'p_sku_id': sku_id,
+                'p_location_id': from_loc,
+                'p_delta': -quantity,
+                'p_memo': f'이동출고: {reason}' if reason else '이동출고',
+                'p_user_id': current_user.id,
+            })
         except Exception:
             logger.exception('이동 출고 재고 반영 실패')
-
-    # 도착 로케이션 재고 증가
-    if to_loc:
-        inv_repo.log_movement({
-            'sku_id': sku_id,
-            'location_id': to_loc,
-            'movement_type': 'transfer_in',
-            'quantity': quantity,
-            'memo': f'이동입고: {reason}' if reason else '이동입고',
-            'user_id': current_user.id,
-        })
+    elif to_loc:
         try:
-            inv_repo.adjust_stock(sku_id, to_loc, delta=quantity)
+            from services.warehouse_service import _call_rpc
+            _call_rpc(inv_repo, 'fn_adjust_stock', {
+                'p_operator_id': inv_repo.operator_id,
+                'p_sku_id': sku_id,
+                'p_location_id': to_loc,
+                'p_delta': quantity,
+                'p_memo': f'이동입고: {reason}' if reason else '이동입고',
+                'p_user_id': current_user.id,
+            })
         except Exception:
             logger.exception('이동 입고 재고 반영 실패')
 

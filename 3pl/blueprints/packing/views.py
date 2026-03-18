@@ -693,27 +693,17 @@ def api_field_transfer():
     to_loc = int(to_location_id)
     qty = int(quantity)
 
-    # 출발 위치 재고 확인
-    stock = inv_repo.get_stock(sku['id'], from_loc)
-    if not stock or stock['quantity'] < qty:
-        avail = stock['quantity'] if stock else 0
-        return jsonify({'ok': False,
-                        'error': f'재고 부족: 현재 {avail}개 (요청 {qty}개)'})
+    # 재고 부족 체크는 RPC 내부에서 원자적으로 수행됨 (아래 process_transfer 호출)
 
-    # 이동 처리
+    # 이동 처리 — RPC 원자적 이동 (동시접속 안전)
     try:
-        inv_repo.adjust_stock(sku['id'], from_loc, -qty)
-        inv_repo.adjust_stock(sku['id'], to_loc, qty)
-        inv_repo.log_movement({
-            'sku_id': sku['id'], 'location_id': from_loc,
-            'movement_type': 'transfer_out', 'quantity': -qty,
-            'memo': '현장스캔 이동(출발)', 'user_id': current_user.id,
-        })
-        inv_repo.log_movement({
-            'sku_id': sku['id'], 'location_id': to_loc,
-            'movement_type': 'transfer_in', 'quantity': qty,
-            'memo': '현장스캔 이동(도착)', 'user_id': current_user.id,
-        })
+        from services.warehouse_service import process_transfer
+        result = process_transfer(inv_repo, sku['id'], from_loc, to_loc, qty,
+                                  memo='현장스캔 이동', user_id=current_user.id)
+        if not result.get('ok'):
+            return jsonify({'ok': False, 'error': result.get('error', '이동 처리 실패')})
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)})
     except Exception as e:
         return jsonify({'ok': False, 'error': f'이동 처리 실패: {e}'})
 
@@ -797,16 +787,21 @@ def api_field_stockcheck():
         if delta == 0:
             continue
 
-        inv_repo.adjust_stock(int(sku_id), loc_id, delta)
-        inv_repo.log_movement({
-            'sku_id': int(sku_id),
-            'location_id': loc_id,
-            'movement_type': 'adjust',
-            'quantity': delta,
-            'memo': f'현장실사: 시스템 {system_qty} → 실제 {actual_qty}',
-            'user_id': current_user.id,
-        })
-        adjusted_count += 1
+        # RPC 원자적 재고 조정 (동시접속 안전)
+        try:
+            from services.warehouse_service import _call_rpc
+            result = _call_rpc(inv_repo, 'fn_adjust_stock', {
+                'p_operator_id': inv_repo.operator_id,
+                'p_sku_id': int(sku_id),
+                'p_location_id': loc_id,
+                'p_delta': delta,
+                'p_memo': f'현장실사: 시스템 {system_qty} → 실제 {actual_qty}',
+                'p_user_id': current_user.id,
+            })
+            if result.get('ok'):
+                adjusted_count += 1
+        except Exception:
+            pass  # 개별 항목 실패는 스킵
 
     return jsonify({'ok': True, 'adjusted_count': adjusted_count})
 

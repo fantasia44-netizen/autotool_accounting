@@ -17,6 +17,16 @@ class Config:
     UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', 'uploads')
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
 
+    # 세션 비활동 타임아웃 (분)
+    SESSION_INACTIVITY_TIMEOUT = 60  # 개발: 60분
+
+    # 로그인 보안
+    LOGIN_MAX_ATTEMPTS = 5
+    LOGIN_LOCKOUT_MINUTES = 15
+    IP_RATE_LIMIT_ATTEMPTS = 20
+    IP_RATE_LIMIT_WINDOW = 900  # 15분
+    IP_RATE_LIMIT_BLOCK_DURATION = 1800  # 30분
+
     # 앱 모드
     APP_NAME = 'PackFlow'
     APP_MODE = os.environ.get('APP_MODE', '3pl')
@@ -34,3 +44,5 @@ class DevelopmentConfig(Config):
 class ProductionConfig(Config):
     DEBUG = False
     SESSION_COOKIE_SECURE = True
+    SESSION_INACTIVITY_TIMEOUT = 120  # 프로덕션: 2시간
+    LOGIN_MAX_ATTEMPTS = 3  # 프로덕션은 더 엄격
