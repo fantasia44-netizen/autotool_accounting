@@ -272,6 +272,216 @@ def shipments():
                            filter_status=status, client_map=client_map)
 
 
+# ═══ 택배 엑셀 다운로드/업로드 ═══
+
+@operator_bp.route('/shipments/excel-download')
+@login_required
+@_require_operator
+def shipment_excel_download():
+    """출고 대상 주문 엑셀 다운로드 (택배사 전달용).
+
+    packed 상태 주문을 엑셀로 내보내기.
+    컬럼: 주문번호, 수취인, 연락처, 주소, 우편번호, 상품명, 수량, 메모, 택배사, 송장번호(빈칸)
+    """
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from flask import send_file
+    from db_utils import get_repo
+
+    repo = get_repo('order')
+    inv_repo = get_repo('inventory')
+    client_repo = get_repo('client')
+
+    # packed 또는 confirmed 상태 주문 조회
+    status = request.args.get('status', 'packed')
+    orders = repo.list_orders(status=status, limit=500) or []
+
+    if not orders:
+        flash(f'"{status}" 상태 주문이 없습니다.', 'warning')
+        return redirect(url_for('operator.shipments'))
+
+    # SKU 캐시
+    all_skus = inv_repo.list_skus() or []
+    sku_map = {s['id']: s for s in all_skus}
+    clients = client_repo.list_clients() or []
+    client_map = {c['id']: c['name'] for c in clients}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '출고대상'
+
+    # 헤더
+    headers = ['주문번호', '고객사', '채널', '수취인', '연락처', '주소', '우편번호',
+               '상품명', '수량', '메모', '택배사', '송장번호']
+    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+    header_font = Font(bold=True, color='FFFFFF', size=11)
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center')
+
+    # 데이터
+    row_num = 2
+    for order in orders:
+        items = repo.get_order_items(order['id']) or []
+        product_names = []
+        total_qty = 0
+        for item in items:
+            sku = sku_map.get(item.get('sku_id'), {})
+            name = sku.get('name', f"SKU#{item.get('sku_id', '?')}")
+            qty = item.get('quantity', item.get('qty', 1))
+            product_names.append(f"{name}({qty})")
+            total_qty += qty
+
+        ws.cell(row=row_num, column=1, value=order.get('order_no', ''))
+        ws.cell(row=row_num, column=2, value=client_map.get(order.get('client_id'), ''))
+        ws.cell(row=row_num, column=3, value=order.get('channel', ''))
+        ws.cell(row=row_num, column=4, value=order.get('recipient_name', ''))
+        ws.cell(row=row_num, column=5, value=order.get('recipient_phone', ''))
+        ws.cell(row=row_num, column=6, value=order.get('recipient_address', ''))
+        ws.cell(row=row_num, column=7, value=order.get('zipcode', ''))
+        ws.cell(row=row_num, column=8, value=', '.join(product_names))
+        ws.cell(row=row_num, column=9, value=total_qty)
+        ws.cell(row=row_num, column=10, value=order.get('memo', ''))
+        ws.cell(row=row_num, column=11, value='')  # 택배사 (빈칸)
+        ws.cell(row=row_num, column=12, value='')  # 송장번호 (빈칸)
+        row_num += 1
+
+    # 열 너비 자동 조절
+    col_widths = [15, 12, 10, 10, 15, 40, 10, 30, 8, 20, 12, 18]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
+
+    # 숨겨진 order_id 컬럼 (업로드 시 매칭용)
+    ws.cell(row=1, column=13, value='order_id')
+    ws.column_dimensions['M'].hidden = True
+    for i, order in enumerate(orders, 2):
+        ws.cell(row=i, column=13, value=order['id'])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from services.tz_utils import today_kst
+    filename = f'출고대상_{today_kst()}_{status}.xlsx'
+    return send_file(buf, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True, download_name=filename)
+
+
+@operator_bp.route('/shipments/invoice-upload', methods=['POST'])
+@login_required
+@_require_operator
+def shipment_invoice_upload():
+    """송장 엑셀 업로드 — 주문에 택배사/송장번호 매칭 + shipped 전환.
+
+    엑셀 컬럼: 주문번호, ..., 택배사, 송장번호, order_id(숨김)
+    송장번호가 있는 행만 처리.
+    """
+    from db_utils import get_repo
+    from openpyxl import load_workbook
+    from io import BytesIO
+
+    file = request.files.get('invoice_file')
+    if not file or not file.filename.endswith(('.xlsx', '.xls')):
+        flash('엑셀 파일(.xlsx)을 선택해주세요.', 'warning')
+        return redirect(url_for('operator.shipments'))
+
+    try:
+        wb = load_workbook(BytesIO(file.read()), read_only=True, data_only=True)
+        ws = wb.active
+    except Exception as e:
+        flash(f'엑셀 파일 읽기 오류: {e}', 'danger')
+        return redirect(url_for('operator.shipments'))
+
+    repo = get_repo('order')
+    inv_repo = get_repo('inventory')
+
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    success = 0
+    skipped = 0
+    errors = []
+
+    for row_idx, row in enumerate(rows, 2):
+        if len(row) < 12:
+            continue
+
+        order_no = str(row[0] or '').strip()
+        carrier = str(row[10] or '').strip()  # 택배사 (col K)
+        invoice_no = str(row[11] or '').strip()  # 송장번호 (col L)
+        order_id = row[12] if len(row) > 12 else None  # 숨겨진 order_id (col M)
+
+        if not invoice_no:
+            skipped += 1
+            continue
+
+        # order_id로 먼저 매칭, 없으면 order_no로
+        order = None
+        if order_id:
+            try:
+                order = repo.get_order(int(order_id))
+            except (ValueError, TypeError):
+                pass
+        if not order and order_no:
+            found = repo._query(repo.ORDER_TABLE,
+                                filters=[('order_no', 'eq', order_no)],
+                                limit=1)
+            order = found[0] if found else None
+
+        if not order:
+            errors.append(f'행 {row_idx}: 주문 "{order_no}" 없음')
+            continue
+
+        if order.get('status') == 'shipped':
+            skipped += 1
+            continue
+
+        # shipment 생성 + 주문 shipped 전환
+        try:
+            repo.create_shipment({
+                'order_id': order['id'],
+                'shipment_type': 'normal',
+                'invoice_no': invoice_no,
+                'status': 'shipped',
+                'client_id': order.get('client_id'),
+            })
+
+            old_status = order.get('status', '')
+            repo.update_order_status(order['id'], 'shipped')
+            repo.log_status_change(order['id'], old_status, 'shipped',
+                                   changed_by=current_user.id,
+                                   reason=f'송장업로드: {carrier} {invoice_no}')
+
+            # 출고비 과금
+            try:
+                cid = order.get('client_id')
+                if cid:
+                    from services.client_billing_service import record_outbound_fee
+                    order_full = repo.get_order_with_items(order['id'])
+                    items = order_full.get('items', []) if order_full else []
+                    record_outbound_fee(get_repo('client_billing'),
+                                        get_repo('client_rate'), cid,
+                                        order_id=order['id'],
+                                        item_count=len(items))
+            except Exception:
+                logger.exception('송장업로드 과금 실패: order_id=%s', order['id'])
+
+            success += 1
+        except Exception as e:
+            errors.append(f'행 {row_idx}: {order_no} 처리 실패 ({e})')
+
+    msg = f'송장 업로드 완료: {success}건 처리'
+    if skipped:
+        msg += f', {skipped}건 스킵'
+    if errors:
+        msg += f', {len(errors)}건 오류'
+        for err in errors[:5]:  # 최대 5개만 표시
+            flash(err, 'warning')
+    flash(msg, 'success' if not errors else 'warning')
+    return redirect(url_for('operator.shipments'))
+
+
 # ═══ 반품관리 (고객 회송) ═══
 
 @operator_bp.route('/returns')
