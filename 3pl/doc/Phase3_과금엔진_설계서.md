@@ -374,7 +374,84 @@ SKU별 수익:
 
 ---
 
-## 8. 다음 단계 (과금 외)
+---
+
+## 8. 고객사별 출고 등급 시스템 (사이즈 자동 판별)
+
+### 8-1. DB 스키마
+
+```sql
+-- 고객사별 출고 등급 구간 설정 (최대 6단계)
+CREATE TABLE IF NOT EXISTS client_shipping_tiers (
+    id BIGSERIAL PRIMARY KEY,
+    operator_id BIGINT NOT NULL REFERENCES operators(id),
+    client_id BIGINT NOT NULL REFERENCES clients(id),
+    tier_name TEXT NOT NULL,           -- 소형/중형/중대형/대형/특대형/파레트
+    tier_order INT NOT NULL,           -- 정렬순서 (1~6)
+    qty_min INT NOT NULL,              -- 수량 구간 시작
+    qty_max INT NOT NULL,              -- 수량 구간 끝
+    box_type TEXT NOT NULL,            -- 박스 종류명 (아이스박스(소), 스티로폼(대) 등)
+    ice_pack_count INT DEFAULT 0,      -- 아이스팩 수량
+    dry_ice_count INT DEFAULT 0,       -- 드라이아이스 수량
+    cushion_count INT DEFAULT 0,       -- 완충재 수량
+    tape_count INT DEFAULT 1,          -- 테이프 수량
+    extra_materials JSONB DEFAULT '{}',-- 추가 부자재 {name: qty}
+    work_fee_name TEXT,                -- 연결할 작업비 요금항목명
+    courier_fee_name TEXT,             -- 연결할 택배비 요금항목명
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_tiers_client
+    ON client_shipping_tiers(client_id, tier_order);
+```
+
+### 8-2. 예시 데이터 (A업체)
+
+| 등급 | 수량 | 박스 | 아이스팩 | 드라이 | 완충재 | 작업비 |
+|------|------|------|---------|--------|--------|--------|
+| 소형 | 1~3 | 아이스박스(소) | 2 | 1 | 1 | 기본작업비 |
+| 중형 | 4~8 | 아이스박스(중) | 3 | 2 | 2 | 기본작업비(중형) |
+| 중대형 | 9~15 | 아이스박스(대) | 4 | 3 | 3 | 기본작업비(대형) |
+| 대형 | 16~25 | 스티로폼(대) | 6 | 4 | 4 | 기본작업비(대형) |
+| 특대형 | 26~40 | 스티로폼(특대) | 8 | 5 | 5 | 기본작업비(특대) |
+| 파레트 | 41~ | 파레트포장 | 별도 | 별도 | 별도 | 파레트작업비 |
+
+### 8-3. 주문접수 자동 판별 플로우
+
+```
+주문 접수 (총 수량 12개)
+  ↓
+client_shipping_tiers 조회 (해당 고객사)
+  ↓
+qty_min ≤ 12 ≤ qty_max → "중대형" 매칭
+  ↓
+자동 세팅:
+  - box_type: 아이스박스(대)
+  - 아이스팩: 4개
+  - 드라이아이스: 3개
+  - 완충재: 3개
+  ↓
+과금 엔진 호출:
+  - 기본작업비(대형) → client_rates에서 조회
+  - 부자재비: 아이스박스(대)×1 + 아이스팩×4 + 드라이×3 + 완충재×3
+  - 택배비: 중량/사이즈별 자동
+```
+
+### 8-4. 검증 포인트
+
+```
+송장 자동수집 시:
+  1. 주문 수량 확인
+  2. 등급 자동 판별
+  3. 부자재 수량 계산
+  4. 실제 사용량과 대조 (패킹 시 스캔된 부자재와 비교)
+  5. 차이 발생 시 경고 → 수동 확인
+```
+
+---
+
+## 9. 다음 단계 (과금 외)
 
 ### 자동 주문수집 (통합툴에서 가져올 것)
 - 채널별 API 연동 (스마트스토어, 쿠팡, 옥션G마켓)

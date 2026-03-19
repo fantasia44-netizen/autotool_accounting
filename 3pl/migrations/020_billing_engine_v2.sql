@@ -79,7 +79,37 @@ ALTER TABLE daily_inventory_snapshot ENABLE ROW LEVEL SECURITY;
 CREATE POLICY daily_snap_tenant ON daily_inventory_snapshot
     USING (operator_id = current_setting('app.operator_id', true)::bigint);
 
--- 4. 요금 템플릿 (프리셋 재정의)
+-- 4. 고객사별 출고 등급 구간 (사이즈 자동 판별 + 부자재 자동 계산)
+CREATE TABLE IF NOT EXISTS client_shipping_tiers (
+    id BIGSERIAL PRIMARY KEY,
+    operator_id BIGINT NOT NULL REFERENCES operators(id),
+    client_id BIGINT NOT NULL REFERENCES clients(id),
+    tier_name TEXT NOT NULL,
+    tier_order INT NOT NULL,
+    qty_min INT NOT NULL,
+    qty_max INT NOT NULL,
+    box_type TEXT NOT NULL,
+    ice_pack_count INT DEFAULT 0,
+    dry_ice_count INT DEFAULT 0,
+    cushion_count INT DEFAULT 0,
+    tape_count INT DEFAULT 1,
+    extra_materials JSONB DEFAULT '{}',
+    work_fee_name TEXT,
+    courier_fee_name TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shipping_tiers_client
+    ON client_shipping_tiers(client_id, tier_order);
+
+ALTER TABLE client_shipping_tiers ENABLE ROW LEVEL SECURITY;
+CREATE POLICY shipping_tiers_tenant ON client_shipping_tiers
+    USING (operator_id = current_setting('app.operator_id', true)::bigint);
+
+COMMENT ON TABLE client_shipping_tiers IS '고객사별 출고 등급 (수량구간→박스/부자재 자동 결정)';
+
+-- 5. 요금 템플릿 (프리셋 재정의)
 CREATE TABLE IF NOT EXISTS billing_rate_templates (
     id BIGSERIAL PRIMARY KEY,
     template_name TEXT NOT NULL,
