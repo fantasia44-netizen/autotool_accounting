@@ -57,6 +57,76 @@ def storage_calc_command(year_month, force):
     click.echo(f'\n[완료] 성공: {success}, 스킵: {skip}, 실패: {fail}')
 
 
+@click.command('process-billing-queue')
+@click.option('--limit', default=500, help='한 번에 처리할 최대 건수')
+@with_appcontext
+def process_billing_queue_command(limit):
+    """billing_queue의 pending 이벤트를 배치 처리."""
+    from db_utils import get_repo
+    from services.client_billing_service import record_outbound_fee
+    from flask import g
+
+    repo = get_repo('client')
+    supabase = repo.supabase
+
+    # pending 이벤트 조회
+    result = supabase.table('billing_queue') \
+        .select('*') \
+        .eq('status', 'pending') \
+        .order('created_at') \
+        .limit(limit) \
+        .execute()
+
+    events = result.data if result.data else []
+    click.echo(f'[과금큐] pending {len(events)}건 처리 시작')
+
+    success, fail = 0, 0
+    for event in events:
+        eid = event['id']
+        try:
+            event_data = event.get('event_data', {})
+            client_id = event.get('client_id')
+            event_type = event.get('event_type', '')
+
+            if event_type == 'outbound':
+                order_id = event_data.get('order_id')
+                item_count = event_data.get('item_count', 1)
+                total_qty = event_data.get('total_qty', 1)
+
+                billing_repo = get_repo('client_billing')
+                rate_repo = get_repo('client_rate')
+                try:
+                    record_outbound_fee(
+                        billing_repo, rate_repo, client_id,
+                        order_id=order_id,
+                        item_count=item_count,
+                        total_weight_g=0,
+                    )
+                except Exception as e:
+                    click.echo(f'  과금 기록 실패 (fallback): {e}')
+
+            # 처리 완료 마킹
+            supabase.table('billing_queue').update({
+                'status': 'processed',
+                'processed_at': 'now()',
+            }).eq('id', eid).execute()
+            success += 1
+
+        except Exception as e:
+            # 실패 마킹
+            try:
+                supabase.table('billing_queue').update({
+                    'status': 'failed',
+                }).eq('id', eid).execute()
+            except Exception:
+                pass
+            click.echo(f'  ✗ id={eid}: {e}')
+            fail += 1
+
+    click.echo(f'[완료] 성공: {success}, 실패: {fail}')
+
+
 def register_commands(app):
     """Flask 앱에 CLI 커맨드 등록."""
     app.cli.add_command(storage_calc_command)
+    app.cli.add_command(process_billing_queue_command)
