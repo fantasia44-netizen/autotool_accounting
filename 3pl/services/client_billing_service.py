@@ -423,3 +423,84 @@ CATEGORY_LABELS = {
     'vas': '부가서비스',
     'custom': '기타',
 }
+
+
+# ═══ 과금 엔진 v2.0 통합 함수 ═══
+
+def record_fee_v2(billing_repo, rate_repo, client_id, event_type, context,
+                  order_id=None, memo='', mode='precision'):
+    """과금 엔진 v2 통합 과금 함수.
+
+    기존 record_inbound_fee/record_outbound_fee 등을 하나로 통합.
+    client_rates에 formula/conditions가 있으면 엔진 v2로 처리,
+    없으면 기존 방식(amount × qty)으로 fallback.
+
+    Args:
+        billing_repo: ClientBillingRepository
+        rate_repo: ClientRateRepository
+        client_id: 고객사 ID
+        event_type: 'inbound'/'outbound'/'storage'/'return'/'vas'/'material'
+        context: dict — 과금 컨텍스트
+            공통: {qty, item_count, weight_kg, pack_type, ...}
+            출고: {order_id, chargeable_weight_kg, delivery_region, ...}
+            보관: {pallet_count, days, storage_temp, ...}
+        order_id: 주문 ID (optional)
+        memo: 메모
+        mode: 'speed' = 단순 고정가만, 'precision' = 조건별 공식
+
+    Returns:
+        dict: {logged, skipped, total_amount}
+    """
+    if not _is_client_active(client_id):
+        return {'logged': 0, 'skipped': 0, 'total_amount': 0}
+
+    try:
+        from services.billing_engine import calculate_fees, create_billing_event
+
+        # 해당 이벤트 관련 카테고리 매핑
+        category_map = {
+            'inbound': ['inbound'],
+            'outbound': ['outbound', 'courier'],
+            'storage': ['storage'],
+            'return': ['return'],
+            'vas': ['vas'],
+            'material': ['material'],
+        }
+        categories = category_map.get(event_type, [event_type])
+
+        all_rates = []
+        for cat in categories:
+            all_rates.extend(_get_client_rates_by_category(rate_repo, client_id, cat))
+
+        if not all_rates:
+            return {'logged': 0, 'skipped': 0, 'total_amount': 0}
+
+        # 엔진으로 계산
+        fees = calculate_fees(all_rates, context, mode=mode)
+
+        if not fees:
+            return {'logged': 0, 'skipped': 0, 'total_amount': 0}
+
+        # 과금 기록
+        year_month = _check_invoice_open(billing_repo, client_id, _current_year_month())
+        ts_min = _minute_ts()
+        dedupe_prefix = f"{event_type}:{order_id or client_id}:{ts_min}"
+
+        from db_utils import get_repo
+        operator_id = None
+        try:
+            operator_id = billing_repo.operator_id
+        except Exception:
+            pass
+
+        return create_billing_event(
+            billing_repo, client_id, event_type, fees,
+            order_id=order_id, year_month=year_month,
+            memo=memo, dedupe_prefix=dedupe_prefix,
+            operator_id=operator_id)
+
+    except Exception as e:
+        logger.exception('v2 과금 실패: client_id=%s, event=%s', client_id, event_type)
+        _log_billing_failure(billing_repo, client_id, event_type,
+                             {'context': str(context)[:500], 'memo': memo}, e)
+        return {'logged': 0, 'skipped': 0, 'total_amount': 0}
