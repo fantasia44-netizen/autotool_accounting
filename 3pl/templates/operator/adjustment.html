@@ -5,6 +5,16 @@
 {% block content %}
 <h4 class="page-title">재고조정</h4>
 
+<!-- 탭 -->
+<ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-manual">개별 조정</a></li>
+    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-bulk">엑셀 실사 일괄조정</a></li>
+    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-history">배치 이력 / 되돌리기</a></li>
+</ul>
+
+<div class="tab-content">
+<!-- ═══ 개별 조정 ═══ -->
+<div class="tab-pane fade show active" id="tab-manual">
 <div class="row g-3">
     <div class="col-lg-5">
         <div class="data-card">
@@ -55,7 +65,6 @@
             </div>
         </div>
     </div>
-
     <div class="col-lg-7">
         <div class="data-card">
             <div class="data-card-header"><h6>최근 조정 이력</h6></div>
@@ -80,17 +89,384 @@
         </div>
     </div>
 </div>
+</div>
+
+<!-- ═══ 엑셀 실사 일괄조정 ═══ -->
+<div class="tab-pane fade" id="tab-bulk">
+<div class="row g-3">
+    <div class="col-lg-4">
+        <div class="data-card">
+            <div class="data-card-header"><h6>엑셀 업로드</h6></div>
+            <div class="p-3">
+                <div class="mb-2">
+                    <a href="{{ url_for('operator.adjustment_sample_excel') }}" class="btn btn-outline-primary btn-sm w-100">
+                        <i class="bi bi-download"></i> 실사 양식 다운로드
+                    </a>
+                </div>
+                <hr class="my-2">
+                <div class="mb-2">
+                    <label class="form-label" style="font-size:0.82rem;">실사 기준일 <span class="text-danger">*</span></label>
+                    <input type="date" id="bulkSurveyDate" class="form-control form-control-sm" required>
+                    <div class="form-text" style="font-size:0.75rem;">이 날짜 시점의 시스템 재고와 비교합니다. 이후 입출고는 그대로 유지됩니다.</div>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" style="font-size:0.82rem;">기본 로케이션 (선택)</label>
+                    <select id="bulkWhSelect" class="form-select form-select-sm" onchange="filterBulkLoc(this.value)">
+                        <option value="">전체</option>
+                        {% for w in warehouses %}
+                        <option value="{{ w.id }}">{{ w.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <select id="bulkLocSelect" class="form-select form-select-sm">
+                        <option value="">전체 (SKU 합산)</option>
+                        {% for loc in locations %}
+                        <option value="{{ loc.id }}" data-wh="{{ loc.warehouse_id or '' }}">{{ loc.display }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" style="font-size:0.82rem;">엑셀 파일</label>
+                    <input type="file" id="bulkFile" class="form-control form-control-sm" accept=".xlsx,.xls">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" style="font-size:0.82rem;">조정 사유</label>
+                    <input type="text" id="bulkMemo" class="form-control form-control-sm" value="재고실사 일괄조정">
+                </div>
+                <button id="btnPreview" class="btn btn-primary btn-sm w-100" onclick="uploadPreview()">
+                    <i class="bi bi-search"></i> 미리보기
+                </button>
+            </div>
+        </div>
+
+        <!-- 설명 카드 -->
+        <div class="data-card mt-3">
+            <div class="data-card-header"><h6>사용방법</h6></div>
+            <div class="p-3" style="font-size:0.8rem; color:#666;">
+                <ol class="mb-0 ps-3">
+                    <li>양식 다운로드 후 SKU코드와 실사수량 입력</li>
+                    <li><b>실사 기준일</b> 선택 (예: 3/6 재고조사일)</li>
+                    <li>미리보기로 차이 확인</li>
+                    <li>일괄 적용 (배치ID로 이력 관리)</li>
+                    <li>문제 시 배치 되돌리기 가능</li>
+                </ol>
+                <hr class="my-2">
+                <div class="text-muted">
+                    <b>기준일 역산 원리:</b><br>
+                    기준일 시점 재고 = 현재재고 - (기준일 이후 입출고)<br>
+                    차이 = 실사수량 - 기준일시점재고<br>
+                    <span class="text-primary">이후 입출고는 그대로 유지됩니다.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <!-- 미리보기 결과 -->
+        <div id="previewArea" style="display:none;">
+            <div class="data-card">
+                <div class="data-card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">미리보기 결과</h6>
+                    <div>
+                        <span id="previewSummary" class="me-2" style="font-size:0.82rem;"></span>
+                        <button id="btnApply" class="btn btn-success btn-sm" onclick="applyBulk()">
+                            <i class="bi bi-check-lg"></i> 일괄 적용
+                        </button>
+                    </div>
+                </div>
+                <div class="data-card-body">
+                    <div id="previewErrors" class="alert alert-warning py-1 px-2 mb-2" style="font-size:0.8rem; display:none;"></div>
+                    <div style="max-height:500px; overflow-y:auto;">
+                        <table class="table table-compact mb-0">
+                            <thead style="position:sticky;top:0;background:#f8f9fa;">
+                                <tr>
+                                    <th><input type="checkbox" id="checkAll" checked onchange="toggleAll(this)"></th>
+                                    <th>SKU코드</th>
+                                    <th>품명</th>
+                                    <th class="text-end">현재재고</th>
+                                    <th class="text-end" id="thDateStock">기준일재고</th>
+                                    <th class="text-end">이후변동</th>
+                                    <th class="text-end">실사수량</th>
+                                    <th class="text-end">차이(적용)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="previewBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 적용 결과 -->
+        <div id="resultArea" style="display:none;">
+            <div class="data-card">
+                <div class="data-card-header"><h6>적용 결과</h6></div>
+                <div class="data-card-body">
+                    <div id="resultContent"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 초기 안내 -->
+        <div id="emptyGuide" class="text-center text-muted py-5">
+            <i class="bi bi-file-earmark-spreadsheet" style="font-size:3rem;"></i>
+            <p class="mt-2">엑셀 파일을 업로드하고 미리보기를 눌러주세요.</p>
+        </div>
+    </div>
+</div>
+</div>
+
+<!-- ═══ 배치 이력 / 되돌리기 ═══ -->
+<div class="tab-pane fade" id="tab-history">
+<div class="data-card">
+    <div class="data-card-header d-flex justify-content-between align-items-center">
+        <h6 class="mb-0">일괄조정 배치 이력</h6>
+        <button class="btn btn-outline-secondary btn-sm" onclick="loadBatchHistory()"><i class="bi bi-arrow-clockwise"></i> 새로고침</button>
+    </div>
+    <div class="data-card-body">
+        <div id="batchHistoryBody">
+            <p class="text-center text-muted py-3">탭 선택 시 자동 로딩됩니다.</p>
+        </div>
+    </div>
+</div>
+</div>
+</div><!-- tab-content -->
 
 <script>
+// ── 개별조정 로케이션 필터 ──
 const allAdjLocOpts = [...document.getElementById('locSelect').options].slice(1);
 function filterAdjLoc(whId) {
     const sel = document.getElementById('locSelect');
     sel.innerHTML = '<option value="">선택</option>';
     allAdjLocOpts.forEach(opt => {
-        if (!whId || opt.dataset.wh == whId) {
-            sel.appendChild(opt.cloneNode(true));
-        }
+        if (!whId || opt.dataset.wh == whId) sel.appendChild(opt.cloneNode(true));
     });
 }
+
+// ── 일괄조정 로케이션 필터 ──
+const allBulkLocOpts = [...document.getElementById('bulkLocSelect').options].slice(1);
+function filterBulkLoc(whId) {
+    const sel = document.getElementById('bulkLocSelect');
+    sel.innerHTML = '<option value="">전체 (SKU 합산)</option>';
+    allBulkLocOpts.forEach(opt => {
+        if (!whId || opt.dataset.wh == whId) sel.appendChild(opt.cloneNode(true));
+    });
+}
+
+// ── 전역 상태 ──
+let previewData = [];
+
+// ── 미리보기 ──
+async function uploadPreview() {
+    const fileInput = document.getElementById('bulkFile');
+    const surveyDate = document.getElementById('bulkSurveyDate').value;
+    if (!fileInput.files.length) { alert('엑셀 파일을 선택해주세요.'); return; }
+    if (!surveyDate) { alert('실사 기준일을 선택해주세요.'); return; }
+
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    fd.append('location_id', document.getElementById('bulkLocSelect').value);
+    fd.append('survey_date', surveyDate);
+
+    document.getElementById('btnPreview').disabled = true;
+    document.getElementById('btnPreview').innerHTML = '<span class="spinner-border spinner-border-sm"></span> 분석중...';
+
+    try {
+        const res = await fetch('{{ url_for("operator.adjustment_bulk_preview") }}', { method: 'POST', body: fd });
+        const json = await res.json();
+        if (!json.ok) { alert(json.error); return; }
+
+        previewData = json.preview;
+        renderPreview(json);
+    } catch(e) {
+        alert('오류: ' + e.message);
+    } finally {
+        document.getElementById('btnPreview').disabled = false;
+        document.getElementById('btnPreview').innerHTML = '<i class="bi bi-search"></i> 미리보기';
+    }
+}
+
+function renderPreview(json) {
+    document.getElementById('emptyGuide').style.display = 'none';
+    document.getElementById('resultArea').style.display = 'none';
+    document.getElementById('previewArea').style.display = 'block';
+
+    const surveyDate = document.getElementById('bulkSurveyDate').value;
+    document.getElementById('thDateStock').textContent = surveyDate ? surveyDate + ' 재고' : '현재재고';
+
+    // 에러 표시
+    const errDiv = document.getElementById('previewErrors');
+    if (json.errors && json.errors.length) {
+        errDiv.style.display = 'block';
+        errDiv.innerHTML = '<b>경고:</b><br>' + json.errors.join('<br>');
+    } else {
+        errDiv.style.display = 'none';
+    }
+
+    // 요약
+    document.getElementById('previewSummary').innerHTML =
+        `총 <b>${json.total_items}</b>건 | ` +
+        `<span class="text-success">증가 ${json.increase_count}</span> | ` +
+        `<span class="text-danger">감소 ${json.decrease_count}</span> | ` +
+        `<span class="text-muted">변동없음 ${json.no_change_count}</span>`;
+
+    // 테이블
+    const tbody = document.getElementById('previewBody');
+    tbody.innerHTML = '';
+    json.preview.forEach((item, idx) => {
+        const cls = item.delta > 0 ? 'text-success' : item.delta < 0 ? 'text-danger' : 'text-muted';
+        const sign = item.delta > 0 ? '+' : '';
+        const afterSign = item.after_movements > 0 ? '+' : '';
+        tbody.innerHTML += `
+            <tr class="${item.delta === 0 ? 'opacity-50' : ''}">
+                <td><input type="checkbox" class="item-check" data-idx="${idx}" ${item.delta !== 0 ? 'checked' : ''}></td>
+                <td style="font-size:0.82rem;">${item.sku_code}</td>
+                <td style="font-size:0.82rem;">${item.sku_name}</td>
+                <td class="text-end">${item.current_qty.toLocaleString()}</td>
+                <td class="text-end fw-semibold">${item.system_qty_at_date.toLocaleString()}</td>
+                <td class="text-end text-muted">${afterSign}${item.after_movements.toLocaleString()}</td>
+                <td class="text-end">${item.actual_qty.toLocaleString()}</td>
+                <td class="text-end fw-bold ${cls}">${sign}${item.delta.toLocaleString()}</td>
+            </tr>`;
+    });
+}
+
+function toggleAll(el) {
+    document.querySelectorAll('.item-check').forEach(cb => cb.checked = el.checked);
+}
+
+// ── 일괄 적용 ──
+async function applyBulk() {
+    const checks = document.querySelectorAll('.item-check:checked');
+    const indices = [...checks].map(cb => parseInt(cb.dataset.idx));
+    const items = indices.map(i => previewData[i]).filter(it => it.delta !== 0);
+
+    if (!items.length) { alert('적용할 항목이 없습니다.'); return; }
+    if (!confirm(`${items.length}건의 재고조정을 적용하시겠습니까?\n\n이 작업은 배치ID로 관리되며 되돌리기가 가능합니다.`)) return;
+
+    document.getElementById('btnApply').disabled = true;
+    document.getElementById('btnApply').innerHTML = '<span class="spinner-border spinner-border-sm"></span> 적용중...';
+
+    try {
+        const res = await fetch('{{ url_for("operator.adjustment_bulk_apply") }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                items: items,
+                memo: document.getElementById('bulkMemo').value,
+            }),
+        });
+        const json = await res.json();
+        showResult(json);
+    } catch(e) {
+        alert('오류: ' + e.message);
+    } finally {
+        document.getElementById('btnApply').disabled = false;
+        document.getElementById('btnApply').innerHTML = '<i class="bi bi-check-lg"></i> 일괄 적용';
+    }
+}
+
+function showResult(json) {
+    document.getElementById('previewArea').style.display = 'none';
+    document.getElementById('resultArea').style.display = 'block';
+
+    let html = `
+        <div class="alert ${json.fail ? 'alert-warning' : 'alert-success'} py-2">
+            <b>배치 ID:</b> <code>${json.batch_id}</code><br>
+            성공: <b class="text-success">${json.success}</b>건 |
+            실패: <b class="text-danger">${json.fail}</b>건 |
+            건너뜀: <b class="text-muted">${json.skipped}</b>건
+        </div>
+        <table class="table table-compact mb-0">
+            <thead><tr><th>SKU</th><th class="text-end">조정수량</th><th class="text-end">변경후</th><th>상태</th></tr></thead>
+            <tbody>`;
+    for (const d of json.details) {
+        const cls = d.status === 'success' ? '' : 'table-danger';
+        const sign = d.delta > 0 ? '+' : '';
+        html += `<tr class="${cls}">
+            <td>${d.sku_code}</td>
+            <td class="text-end ${d.delta > 0 ? 'text-success' : 'text-danger'} fw-bold">${sign}${d.delta}</td>
+            <td class="text-end">${d.new_qty != null ? d.new_qty : '-'}</td>
+            <td>${d.status === 'success' ? '<span class="badge bg-success">완료</span>' : '<span class="badge bg-danger">실패</span> ' + (d.error||'')}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('resultContent').innerHTML = html;
+}
+
+// ── 배치 이력 ──
+async function loadBatchHistory() {
+    const div = document.getElementById('batchHistoryBody');
+    div.innerHTML = '<p class="text-center py-3"><span class="spinner-border spinner-border-sm"></span> 로딩중...</p>';
+
+    try {
+        const res = await fetch('{{ url_for("operator.adjustment_batch_history") }}');
+        const json = await res.json();
+        if (!json.ok || !json.batches.length) {
+            div.innerHTML = '<p class="text-center text-muted py-3">일괄조정 이력이 없습니다.</p>';
+            return;
+        }
+        let html = '';
+        for (const b of json.batches) {
+            const isRollback = b.batch_id.startsWith('ROLLBACK-');
+            html += `
+            <div class="border rounded p-3 mb-2">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <div>
+                        <code class="fw-bold">${b.batch_id}</code>
+                        <span class="text-muted ms-2" style="font-size:0.8rem;">${(b.created_at||'').slice(0,16)}</span>
+                    </div>
+                    <div>
+                        <span class="badge bg-primary">${b.items.length}건</span>
+                        <span class="badge bg-success">+${b.total_increase}</span>
+                        <span class="badge bg-danger">${b.total_decrease}</span>
+                        ${!isRollback ? `<button class="btn btn-outline-warning btn-sm ms-2" onclick="rollbackBatch('${b.batch_id}')"><i class="bi bi-arrow-counterclockwise"></i> 되돌리기</button>` : '<span class="badge bg-secondary ms-2">되돌림</span>'}
+                    </div>
+                </div>
+                <details>
+                    <summary style="font-size:0.8rem; cursor:pointer;">상세 내역 보기</summary>
+                    <table class="table table-compact table-sm mt-1 mb-0">
+                        <thead><tr><th>SKU ID</th><th class="text-end">수량</th><th>메모</th></tr></thead>
+                        <tbody>
+                            ${b.items.map(it => `<tr>
+                                <td>${it.sku_id}</td>
+                                <td class="text-end ${it.quantity>0?'text-success':'text-danger'} fw-bold">${it.quantity>0?'+':''}${it.quantity}</td>
+                                <td style="font-size:0.78rem;">${it.memo||'-'}</td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </details>
+            </div>`;
+        }
+        div.innerHTML = html;
+    } catch(e) {
+        div.innerHTML = `<p class="text-center text-danger py-3">로딩 실패: ${e.message}</p>`;
+    }
+}
+
+async function rollbackBatch(batchId) {
+    if (!confirm(`배치 "${batchId}"의 모든 조정을 되돌리시겠습니까?\n\n역방향 조정이 새로 기록됩니다.`)) return;
+
+    try {
+        const res = await fetch('{{ url_for("operator.adjustment_batch_rollback") }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ batch_id: batchId }),
+        });
+        const json = await res.json();
+        if (json.ok) {
+            alert(`되돌리기 완료: 성공 ${json.rollback_success}건, 실패 ${json.rollback_fail}건`);
+            loadBatchHistory();
+        } else {
+            alert('되돌리기 실패: ' + json.error);
+        }
+    } catch(e) {
+        alert('오류: ' + e.message);
+    }
+}
+
+// 배치이력 탭 진입 시 자동 로드
+document.querySelector('a[href="#tab-history"]').addEventListener('shown.bs.tab', loadBatchHistory);
 </script>
 {% endblock %}
