@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}속도모드 — {{ app_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    :root {
+        --spd-primary: #f59e0b;
+        --spd-primary-light: #fef3c7;
+        --spd-success: #16a34a;
+        --spd-success-light: #dcfce7;
+        --spd-danger: #ef4444;
+        --spd-bg: #fffbeb;
+        --spd-card: #ffffff;
+        --spd-text: #1e293b;
+    }
+    body { background: var(--spd-bg) !important; }
+    .speed-header {
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+        color: white; padding: 12px 20px; text-align: center;
+        font-size: 1.2rem; font-weight: 700;
+    }
+    .scan-input {
+        font-size: 1.5rem; text-align: center; padding: 16px;
+        border: 3px solid var(--spd-primary); border-radius: 12px;
+    }
+    .scan-input:focus { border-color: #d97706; box-shadow: 0 0 0 4px rgba(245,158,11,0.3); }
+    .result-card {
+        border-radius: 12px; padding: 20px; margin-top: 16px;
+        border: 2px solid #e5e7eb; background: var(--spd-card);
+    }
+    .result-success { border-color: var(--spd-success); background: var(--spd-success-light); }
+    .result-error { border-color: var(--spd-danger); background: #fef2f2; }
+    .big-count { font-size: 3rem; font-weight: 800; }
+    .auto-badge { background: var(--spd-primary); color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; }
+    .btn-complete {
+        font-size: 1.3rem; padding: 16px 40px; border-radius: 12px;
+        background: var(--spd-success); color: white; border: none; font-weight: 700;
+    }
+    .btn-complete:hover { background: #15803d; color: white; }
+    .stats-bar { display: flex; gap: 20px; justify-content: center; padding: 12px; background: white; border-radius: 8px; }
+    .stats-item { text-align: center; }
+    .stats-item .num { font-size: 1.8rem; font-weight: 700; color: var(--spd-primary); }
+    .stats-item .label { font-size: 0.75rem; color: #6b7280; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="speed-header">
+    <i class="bi bi-lightning-charge-fill"></i> 속도모드 (A모드) — 1-Touch 패킹
+</div>
+
+<!-- 실적 바 -->
+<div class="stats-bar mt-3">
+    <div class="stats-item">
+        <div class="num" id="statComplete">0</div>
+        <div class="label">완료</div>
+    </div>
+    <div class="stats-item">
+        <div class="num" id="statUPH">0</div>
+        <div class="label">UPH</div>
+    </div>
+    <div class="stats-item">
+        <div class="num" id="statError">0</div>
+        <div class="label">오류</div>
+    </div>
+</div>
+
+<!-- 스캔 입력 -->
+<div class="p-3">
+    <input type="text" id="scanInput" class="form-control scan-input"
+           placeholder="송장 바코드 스캔" autofocus autocomplete="off">
+</div>
+
+<!-- 결과 영역 -->
+<div class="px-3" id="resultArea"></div>
+
+<!-- 오디오 피드백 -->
+<audio id="audioOk" preload="auto"><source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACA" type="audio/wav"></audio>
+<audio id="audioError" preload="auto"><source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACA" type="audio/wav"></audio>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function(){
+    const scanInput = document.getElementById('scanInput');
+    const resultArea = document.getElementById('resultArea');
+    let completedCount = 0;
+    let errorCount = 0;
+    let startTime = Date.now();
+
+    function updateStats() {
+        document.getElementById('statComplete').textContent = completedCount;
+        document.getElementById('statError').textContent = errorCount;
+        const hours = (Date.now() - startTime) / 3600000;
+        document.getElementById('statUPH').textContent = hours > 0.01
+            ? Math.round(completedCount / hours) : 0;
+    }
+
+    function playOk() {
+        try { new Audio('data:audio/wav;base64,UklGRl9vT19teleQyZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQ==').play(); } catch(e){}
+    }
+    function playError() {
+        try {
+            const ctx = new (window.AudioContext||window.webkitAudioContext)();
+            const osc = ctx.createOscillator(); osc.type='square'; osc.frequency.value=400;
+            osc.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime+0.3);
+        } catch(e){}
+    }
+
+    function focusScan() { setTimeout(() => { scanInput.value=''; scanInput.focus(); }, 100); }
+
+    // 스캔 입력 처리
+    scanInput.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const barcode = this.value.trim();
+        if (!barcode) return;
+        lookupOrder(barcode);
+    });
+
+    async function lookupOrder(barcode) {
+        resultArea.innerHTML = '<div class="text-center p-4"><div class="spinner-border text-warning"></div></div>';
+        try {
+            const res = await fetch('/packing/api/speed/lookup', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''},
+                body: JSON.stringify({barcode})
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                showError(data.error || '주문 없음');
+                return;
+            }
+            if (data.auto_complete) {
+                // 단품 → 즉시 완료
+                await completeOrder(data.order_id, data);
+            } else {
+                // 합포 → 수량 확인 UI
+                showMultiConfirm(data);
+            }
+        } catch(err) {
+            showError('통신 오류: ' + err.message);
+        }
+    }
+
+    function showMultiConfirm(data) {
+        const itemsHtml = data.items.map(it =>
+            `<div class="d-flex justify-content-between py-1 border-bottom">
+                <span>${it.sku_name}</span>
+                <span class="fw-bold">${it.qty}개</span>
+            </div>`
+        ).join('');
+        resultArea.innerHTML = `
+            <div class="result-card">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5 class="mb-0">${data.order_no}</h5>
+                    <span class="auto-badge">합포 ${data.total_items}종</span>
+                </div>
+                <div class="mb-3">${itemsHtml}</div>
+                <div class="text-center">
+                    <div class="big-count mb-2">총 ${data.total_qty}개</div>
+                    <button class="btn-complete" onclick="window._completeOrder(${data.order_id})">
+                        <i class="bi bi-check-lg"></i> 확인 완료
+                    </button>
+                </div>
+            </div>`;
+        playOk();
+    }
+
+    window._completeOrder = async function(orderId) {
+        await completeOrder(orderId);
+    };
+
+    async function completeOrder(orderId, lookupData) {
+        try {
+            const res = await fetch('/packing/api/speed/complete', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''},
+                body: JSON.stringify({order_id: orderId})
+            });
+            const data = await res.json();
+            if (data.ok) {
+                completedCount++;
+                updateStats();
+                resultArea.innerHTML = `
+                    <div class="result-card result-success text-center">
+                        <div style="font-size:3rem; color:var(--spd-success)"><i class="bi bi-check-circle-fill"></i></div>
+                        <div class="fw-bold fs-5">패킹 완료</div>
+                    </div>`;
+                playOk();
+            } else {
+                showError(data.error || '처리 실패');
+            }
+        } catch(err) {
+            showError('통신 오류');
+        }
+        focusScan();
+    }
+
+    function showError(msg) {
+        errorCount++;
+        updateStats();
+        resultArea.innerHTML = `
+            <div class="result-card result-error text-center">
+                <div style="font-size:3rem; color:var(--spd-danger)"><i class="bi bi-x-circle-fill"></i></div>
+                <div class="fw-bold fs-5">${msg}</div>
+            </div>`;
+        playError();
+        focusScan();
+    }
+
+    // 초기 포커스
+    focusScan();
+    updateStats();
+})();
+</script>
+{% endblock %}

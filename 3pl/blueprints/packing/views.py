@@ -902,3 +902,186 @@ def api_field_sku_lookup():
     result['total_stock'] = sum(s.get('quantity', 0) for s in (all_stocks or []))
 
     return jsonify(result)
+
+
+# ═══════════════════════════════════════════════════
+# 속도모드 (Speed Mode) — 1-Touch 단품 + 합포 수량확인
+# ═══════════════════════════════════════════════════
+
+@packing_bp.route('/speed')
+@login_required
+@_require_packing
+def speed_mode():
+    """속도모드 패킹 페이지."""
+    return render_template('packing/speed_mode.html')
+
+
+@packing_bp.route('/api/speed/lookup', methods=['POST'])
+@login_required
+@_require_packing
+def api_speed_lookup():
+    """속도모드: 송장 스캔 → 주문 조회 + 자동판별.
+
+    단품: 즉시 완료 가능 상태 반환.
+    합포: 수량 확인 필요 상태 반환.
+    """
+    data = request.get_json(silent=True) or {}
+    barcode = data.get('barcode', '').strip()
+    if not barcode:
+        return jsonify({'ok': False, 'error': '바코드를 입력해주세요.'})
+
+    from db_utils import get_repo
+    order_repo = get_repo('order')
+
+    barcode_clean = barcode.replace('-', '')
+    shipments = order_repo.search_by_invoice(barcode_clean) or []
+
+    if not shipments:
+        # 송장 없으면 주문번호로 검색
+        orders = order_repo.search_orders(barcode_clean) or []
+        if not orders:
+            return jsonify({'ok': False, 'error': f'주문을 찾을 수 없습니다: {barcode}'})
+        order = orders[0]
+    else:
+        ship = shipments[0]
+        order = order_repo.get_order(ship.get('order_id'))
+
+    if not order:
+        return jsonify({'ok': False, 'error': '주문 정보 없음'})
+
+    order_id = order['id']
+    order_full = order_repo.get_order_with_items(order_id)
+    items = order_full.get('items', []) if order_full else []
+
+    # SKU 정보 보강
+    inv_repo = get_repo('inventory')
+    item_details = []
+    for it in items:
+        sku = inv_repo.get_sku(it.get('sku_id')) if it.get('sku_id') else None
+        item_details.append({
+            'sku_id': it.get('sku_id'),
+            'sku_name': sku.get('name', '') if sku else '',
+            'barcode': sku.get('barcode', '') if sku else '',
+            'qty': it.get('quantity', 1),
+        })
+
+    pack_type = order.get('pack_type', 'single')
+    distinct_skus = len(set(it.get('sku_id') for it in items))
+    if not pack_type:
+        pack_type = 'single' if distinct_skus == 1 else 'multi'
+
+    return jsonify({
+        'ok': True,
+        'order_id': order_id,
+        'order_no': order.get('order_no', ''),
+        'channel': order.get('channel', ''),
+        'pack_type': pack_type,
+        'total_items': len(items),
+        'total_qty': sum(it.get('quantity', 1) for it in items),
+        'items': item_details,
+        'status': order.get('status', ''),
+        'auto_complete': pack_type == 'single',  # 단품이면 자동 완료 가능
+    })
+
+
+@packing_bp.route('/api/speed/complete', methods=['POST'])
+@login_required
+@_require_packing
+def api_speed_complete():
+    """속도모드: 패킹 즉시 완료 (검수/영상 생략).
+
+    단품: 바로 완료.
+    합포: 수량 확인 후 완료.
+    """
+    data = request.get_json(silent=True) or {}
+    order_id = data.get('order_id')
+    if not order_id:
+        return jsonify({'ok': False, 'error': 'order_id 누락'})
+
+    from db_utils import get_repo
+    order_repo = get_repo('order')
+    order = order_repo.get_order(order_id)
+
+    if not order:
+        return jsonify({'ok': False, 'error': '주문 없음'})
+
+    status = order.get('status', '')
+    if status in ('shipped', 'delivered', 'cancelled'):
+        return jsonify({'ok': False, 'error': f'이미 처리된 주문 (상태: {status})'})
+
+    # 재고 커밋 (예약분 → 실차감)
+    try:
+        inv_repo = get_repo('inventory')
+        from services.inventory_service import commit_stock
+        commit_stock(inv_repo, order_id)
+    except Exception as e:
+        current_app.logger.warning(f'[속도모드] 재고커밋 실패 order_id={order_id}: {e}')
+
+    # 주문 상태 → packed
+    order_repo.update_order_status(order_id, 'packed')
+    order_repo.log_status_change(order_id, status, 'packed',
+                                 changed_by=current_user.id,
+                                 reason='속도모드 즉시완료')
+
+    # 과금 큐 적재 (비동기)
+    try:
+        client_id = order.get('client_id')
+        if client_id:
+            _enqueue_speed_billing(order_id, client_id, order_repo)
+    except Exception as e:
+        current_app.logger.warning(f'[속도모드] 과금큐 적재 실패: {e}')
+
+    # 작업자 활동 로그
+    try:
+        _log_worker_activity(order_id, order)
+    except Exception:
+        pass
+
+    return jsonify({'ok': True, 'message': '패킹 완료 (속도모드)'})
+
+
+def _enqueue_speed_billing(order_id, client_id, order_repo):
+    """속도모드 과금 이벤트를 billing_queue에 적재."""
+    from db_utils import get_repo
+    from flask import g
+    order_full = order_repo.get_order_with_items(order_id)
+    items = order_full.get('items', []) if order_full else []
+    item_count = len(items)
+    total_qty = sum(it.get('quantity', 1) for it in items)
+
+    repo = get_repo('client')
+    try:
+        repo.supabase.table('billing_queue').insert({
+            'operator_id': g.operator_id,
+            'client_id': client_id,
+            'event_type': 'outbound',
+            'event_data': {
+                'order_id': order_id,
+                'item_count': item_count,
+                'total_qty': total_qty,
+                'mode': 'speed',
+            },
+        }).execute()
+    except Exception as e:
+        current_app.logger.error(f'[billing_queue] insert 실패: {e}')
+
+
+def _log_worker_activity(order_id, order):
+    """작업자 활동 로그 기록."""
+    from db_utils import get_repo
+    from flask import g
+    repo = get_repo('client')
+    items = order.get('items', [])
+    try:
+        repo.supabase.table('worker_activity_log').insert({
+            'operator_id': g.operator_id,
+            'user_id': current_user.id,
+            'activity_type': 'pack',
+            'fulfillment_mode': 'speed',
+            'order_id': order_id,
+            'item_count': len(items) if items else 1,
+            'started_at': datetime.now(timezone.utc).isoformat(),
+            'completed_at': datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception:
+        pass
