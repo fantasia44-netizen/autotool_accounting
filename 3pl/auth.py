@@ -149,14 +149,15 @@ def login():
         return _redirect_by_portal(current_user)
 
     if request.method == 'POST':
+        company_code = request.form.get('company_code', '').strip().upper()
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
         client_ip = request.remote_addr or '0.0.0.0'
 
-        if not username or not password:
-            flash('아이디와 비밀번호를 입력하세요.', 'warning')
+        if not company_code or not username or not password:
+            flash('회사코드, 아이디, 비밀번호를 모두 입력하세요.', 'warning')
             return render_template('login.html', test_mode=_get_test_mode(),
-                                   demo_mode=_is_demo_mode())
+                                   demo_mode=_is_demo_mode(), company_code=company_code)
 
         # ── IP Rate Limit 체크 ──
         blocked_sec = _check_ip_rate_limit(client_ip)
@@ -172,21 +173,39 @@ def login():
                 _record_ip_attempt(client_ip)
                 flash('아이디 또는 비밀번호가 올바르지 않습니다.', 'danger')
                 return render_template('login.html', test_mode=_get_test_mode(),
-                                       demo_mode=True)
+                                       demo_mode=True, company_code=company_code)
             user = User(demo_user)
             login_user(user, remember=True)
-            # 세션에 데모 유저 정보 저장 (user_loader용)
             session['demo_user'] = demo_user
             return _redirect_by_portal(user)
 
-        # ── 실제 모드: Supabase 조회 ──
+        # ── 실제 모드: 회사코드로 operator 조회 → 해당 operator의 user 조회 ──
         db = current_app.supabase
-        res = db.table('users').select('*').eq('username', username).execute()
+
+        # 1) 회사코드로 운영사 찾기
+        op_res = db.table('operators').select('id,name,company_code,is_active').eq(
+            'company_code', company_code).execute()
+        if not op_res.data:
+            _record_ip_attempt(client_ip)
+            flash('존재하지 않는 회사코드입니다.', 'danger')
+            return render_template('login.html', test_mode=_get_test_mode(),
+                                   company_code=company_code)
+        operator = op_res.data[0]
+        if not operator.get('is_active', True):
+            flash('비활성화된 운영사입니다. 관리자에게 문의하세요.', 'danger')
+            return render_template('login.html', test_mode=_get_test_mode(),
+                                   company_code=company_code)
+
+        # 2) 해당 운영사의 사용자 조회
+        res = db.table('users').select('*').eq('username', username).eq(
+            'operator_id', operator['id']).execute()
         if not res.data:
             _record_ip_attempt(client_ip)
-            _write_audit_log(db, username, 'login_fail', client_ip, '존재하지 않는 계정')
+            _write_audit_log(db, username, 'login_fail', client_ip,
+                             f'회사코드={company_code}, 존재하지 않는 계정')
             flash('아이디 또는 비밀번호가 올바르지 않습니다.', 'danger')
-            return render_template('login.html', test_mode=_get_test_mode())
+            return render_template('login.html', test_mode=_get_test_mode(),
+                                   company_code=company_code)
 
         row = res.data[0]
 
@@ -194,7 +213,8 @@ def login():
         if _check_account_lock(row):
             _write_audit_log(db, username, 'login_blocked', client_ip, '계정 잠금 상태')
             flash('계정이 잠겼습니다. 잠시 후 다시 시도하세요.', 'danger')
-            return render_template('login.html', test_mode=_get_test_mode())
+            return render_template('login.html', test_mode=_get_test_mode(),
+                                   company_code=company_code)
 
         # ── 비밀번호 검증 (해시) ──
         if not check_password_hash(row.get('password_hash', ''), password):
@@ -202,11 +222,13 @@ def login():
             _increment_failed_login(db, row['id'], row.get('failed_login_count', 0))
             _write_audit_log(db, username, 'login_fail', client_ip, '비밀번호 불일치')
             flash('아이디 또는 비밀번호가 올바르지 않습니다.', 'danger')
-            return render_template('login.html', test_mode=_get_test_mode())
+            return render_template('login.html', test_mode=_get_test_mode(),
+                                   company_code=company_code)
 
         if not row.get('is_approved'):
             flash('계정 승인 대기 중입니다.', 'warning')
-            return render_template('login.html', test_mode=_get_test_mode())
+            return render_template('login.html', test_mode=_get_test_mode(),
+                                   company_code=company_code)
 
         # ── 로그인 성공 ──
         _reset_failed_login(db, row['id'])
@@ -216,7 +238,86 @@ def login():
         return _redirect_by_portal(user)
 
     return render_template('login.html', test_mode=_get_test_mode(),
-                           demo_mode=_is_demo_mode())
+                           demo_mode=_is_demo_mode(),
+                           company_code=request.args.get('code', ''))
+
+
+@auth_bp.route('/join', methods=['GET'])
+@auth_bp.route('/join/<company_code>', methods=['GET'])
+def join_info(company_code=None):
+    """직원 가입 안내 / 가입 폼 페이지."""
+    operator = None
+    if company_code and not _is_demo_mode():
+        db = current_app.supabase
+        if db:
+            res = db.table('operators').select('id,name,company_code,is_active').eq(
+                'company_code', company_code.upper()).execute()
+            if res.data and res.data[0].get('is_active', True):
+                operator = res.data[0]
+    return render_template('join.html', company_code=company_code or '',
+                           operator=operator, demo_mode=_is_demo_mode())
+
+
+@auth_bp.route('/join/register', methods=['POST'])
+def join_register():
+    """직원 가입 처리."""
+    if _is_demo_mode():
+        flash('데모 모드에서는 가입할 수 없습니다.', 'warning')
+        return redirect(url_for('auth.join_info'))
+
+    company_code = request.form.get('company_code', '').strip().upper()
+    username = request.form.get('username', '').strip()
+    name = request.form.get('name', '').strip()
+    password = request.form.get('password', '').strip()
+    password_confirm = request.form.get('password_confirm', '').strip()
+    phone = request.form.get('phone', '').strip()
+
+    if not all([company_code, username, name, password]):
+        flash('모든 필수 항목을 입력하세요.', 'warning')
+        return redirect(url_for('auth.join_info', company_code=company_code))
+
+    if password != password_confirm:
+        flash('비밀번호가 일치하지 않습니다.', 'danger')
+        return redirect(url_for('auth.join_info', company_code=company_code))
+
+    if len(password) < 6:
+        flash('비밀번호는 6자 이상이어야 합니다.', 'danger')
+        return redirect(url_for('auth.join_info', company_code=company_code))
+
+    db = current_app.supabase
+    # 회사코드로 운영사 조회
+    op_res = db.table('operators').select('id,name,is_active').eq(
+        'company_code', company_code).execute()
+    if not op_res.data:
+        flash('존재하지 않는 회사코드입니다.', 'danger')
+        return redirect(url_for('auth.join_info', company_code=company_code))
+    operator = op_res.data[0]
+    if not operator.get('is_active', True):
+        flash('비활성화된 운영사입니다.', 'danger')
+        return redirect(url_for('auth.join_info', company_code=company_code))
+
+    # 중복 체크 (같은 운영사 내 같은 username)
+    dup_res = db.table('users').select('id').eq('username', username).eq(
+        'operator_id', operator['id']).execute()
+    if dup_res.data:
+        flash('이미 사용 중인 아이디입니다.', 'danger')
+        return redirect(url_for('auth.join_info', company_code=company_code))
+
+    # 가입 (승인 대기 상태)
+    from werkzeug.security import generate_password_hash
+    db.table('users').insert({
+        'username': username,
+        'password_hash': generate_password_hash(password),
+        'name': name,
+        'role': 'viewer',
+        'operator_id': operator['id'],
+        'phone': phone or None,
+        'is_approved': False,
+        'is_active': True,
+    }).execute()
+
+    flash(f'가입 신청 완료! "{operator["name"]}" 관리자의 승인을 기다려주세요.', 'success')
+    return redirect(url_for('auth.login', code=company_code))
 
 
 @auth_bp.route('/logout')
