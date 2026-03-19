@@ -1,7 +1,8 @@
 """피킹리스트 생성 서비스.
 
 주문 목록 → 재고 위치 매칭 → 피킹리스트 자동 생성.
-FIFO (유통기한 빠른 것 우선) 자동 배정.
+- 안정모드(precision): FIFO (유통기한 빠른 것 우선) 위치별 배정.
+- 속도모드(speed): 상품별 총량 그룹 + 단품/합포 분리. 위치 미지정.
 """
 from datetime import datetime, timezone
 
@@ -155,4 +156,121 @@ def generate_picking_list(picking_repo, order_repo, inv_repo, wh_repo,
             order_repo.update_order_status(oid, 'picking_ready')
 
     pl['items'] = picking_items
+    return pl
+
+
+def generate_speed_picking(picking_repo, order_repo, inv_repo,
+                           order_ids, warehouse_id=None, client_id=None,
+                           created_by=None):
+    """속도모드 피킹리스트 생성 — 상품별 총량 + 단품/합포 분리.
+
+    FIFO 위치 할당 없이 SKU별 총수량만 집계.
+    단품 주문은 1-Touch 라인, 합포 주문은 DAS 라인으로 분류.
+
+    Returns:
+        dict: 생성된 picking_list (items + speed_summary 포함)
+    """
+    if not order_ids:
+        raise ValueError('주문을 선택해주세요.')
+
+    # 1. 주문별 SKU 수집 + 단품/합포 분류
+    sku_demand = {}     # {sku_id: total_qty}
+    sku_names = {}      # {sku_id: name}
+    single_orders = []  # 단품 주문 ID
+    multi_orders = []   # 합포 주문 ID
+
+    for oid in order_ids:
+        order = order_repo.get_order_with_items(oid)
+        if not order or not order.get('items'):
+            continue
+        items = order['items']
+        distinct_skus = set(it.get('sku_id') for it in items)
+
+        if len(distinct_skus) == 1:
+            single_orders.append(oid)
+        else:
+            multi_orders.append(oid)
+
+        for item in items:
+            sid = item.get('sku_id')
+            qty = item.get('quantity', 0)
+            sku_demand[sid] = sku_demand.get(sid, 0) + qty
+            if sid not in sku_names:
+                sku = inv_repo.get_sku(sid)
+                sku_names[sid] = sku.get('name', f'SKU#{sid}') if sku else f'SKU#{sid}'
+
+    if not sku_demand:
+        raise ValueError('피킹할 상품이 없습니다.')
+
+    # 2. 재고 충분 여부 체크 (위치 할당 없이 총량만)
+    picking_items = []
+    for sku_id, needed in sorted(sku_demand.items(), key=lambda x: sku_names.get(x[0], '')):
+        stocks = inv_repo.list_stock_by_sku(sku_id)
+        total_available = sum(
+            max((s.get('quantity', 0) - s.get('reserved_qty', 0)), 0)
+            for s in stocks
+        )
+
+        pick_qty = min(needed, total_available)
+        picking_items.append({
+            'order_id': None,
+            'sku_id': sku_id,
+            'location_id': None,
+            'location_code': '',  # 속도모드: 위치 미지정 (작업자 자율)
+            'expected_qty': pick_qty,
+            'lot_number': None,
+            'status': 'pending',
+        })
+
+        if total_available < needed:
+            picking_items.append({
+                'order_id': None,
+                'sku_id': sku_id,
+                'location_id': None,
+                'location_code': '재고부족',
+                'expected_qty': needed - total_available,
+                'lot_number': None,
+                'status': 'short',
+            })
+
+    # 3. 상품명 순 정렬 (동선 최적화)
+    picking_items.sort(key=lambda x: sku_names.get(x.get('sku_id'), ''))
+
+    # 4. 피킹리스트 생성
+    now = datetime.now(timezone.utc)
+    list_no = f"SPL-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
+
+    pl = picking_repo.create_picking_list({
+        'list_no': list_no,
+        'list_type': 'by_product',  # 속도모드는 항상 상품별
+        'warehouse_id': warehouse_id,
+        'client_id': client_id,
+        'status': 'created',
+        'total_items': len(picking_items),
+        'picked_items': 0,
+        'created_by': created_by,
+    })
+    if not pl:
+        raise RuntimeError('피킹리스트 생성 실패')
+
+    pl_id = pl['id']
+    for item in picking_items:
+        item['picking_list_id'] = pl_id
+    picking_repo.create_picking_items(picking_items)
+
+    # 5. 주문 상태 → picking_ready
+    for oid in order_ids:
+        order = order_repo.get_order(oid)
+        if order and order.get('status') in ('confirmed', 'pending'):
+            order_repo.update_order_status(oid, 'picking_ready')
+
+    pl['items'] = picking_items
+    pl['speed_summary'] = {
+        'total_skus': len(sku_demand),
+        'total_qty': sum(sku_demand.values()),
+        'single_orders': len(single_orders),
+        'multi_orders': len(multi_orders),
+        'single_order_ids': single_orders,
+        'multi_order_ids': multi_orders,
+    }
     return pl

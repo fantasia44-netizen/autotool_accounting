@@ -209,20 +209,46 @@ def picking_generate():
         flash('주문을 선택해주세요.', 'warning')
         return redirect(url_for('operator.picking'))
 
-    from services.picking_service import generate_picking_list
+    # 속도모드 주문 여부 확인 → 자동 분기
+    order_repo = get_repo('order')
+    use_speed = False
+    for oid in order_ids:
+        o = order_repo.get_order(oid)
+        if o and o.get('fulfillment_mode') == 'speed':
+            use_speed = True
+            break
+
     try:
-        pl = generate_picking_list(
-            picking_repo=get_repo('picking'),
-            order_repo=get_repo('order'),
-            inv_repo=get_repo('inventory'),
-            wh_repo=get_repo('warehouse'),
-            order_ids=order_ids,
-            warehouse_id=warehouse_id,
-            client_id=client_id,
-            list_type=list_type,
-            created_by=current_user.id,
-        )
-        flash(f'피킹리스트 {pl.get("list_no", "")} 생성 완료 ({len(pl.get("items", []))}건)', 'success')
+        if use_speed:
+            from services.picking_service import generate_speed_picking
+            pl = generate_speed_picking(
+                picking_repo=get_repo('picking'),
+                order_repo=order_repo,
+                inv_repo=get_repo('inventory'),
+                order_ids=order_ids,
+                warehouse_id=warehouse_id,
+                client_id=client_id,
+                created_by=current_user.id,
+            )
+            summary = pl.get('speed_summary', {})
+            flash(f'속도모드 피킹리스트 {pl.get("list_no", "")} 생성 — '
+                  f'SKU {summary.get("total_skus", 0)}종 / '
+                  f'단품 {summary.get("single_orders", 0)}건 / '
+                  f'합포 {summary.get("multi_orders", 0)}건', 'success')
+        else:
+            from services.picking_service import generate_picking_list
+            pl = generate_picking_list(
+                picking_repo=get_repo('picking'),
+                order_repo=order_repo,
+                inv_repo=get_repo('inventory'),
+                wh_repo=get_repo('warehouse'),
+                order_ids=order_ids,
+                warehouse_id=warehouse_id,
+                client_id=client_id,
+                list_type=list_type,
+                created_by=current_user.id,
+            )
+            flash(f'피킹리스트 {pl.get("list_no", "")} 생성 완료 ({len(pl.get("items", []))}건)', 'success')
     except Exception as e:
         flash(f'피킹리스트 생성 오류: {e}', 'danger')
 
