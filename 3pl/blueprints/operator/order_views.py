@@ -64,6 +64,30 @@ def order_status_update(order_id):
     # 재고 예약/해제 연동
     inv_repo = get_repo('inventory')
     if new_status == 'confirmed' and old_status in ('pending', ''):
+        # 풀필먼트 모드 판별 + 단품/합포 분류
+        try:
+            from services.fulfillment_mode_service import determine_order_mode
+            client_repo = get_repo('client')
+            client = client_repo.get_client(order.get('client_id')) or {}
+            order_full = repo.get_order_with_items(order_id)
+            items = order_full.get('items', []) if order_full else []
+            inv_repo_tmp = get_repo('inventory')
+            sku_ids = [it.get('sku_id') for it in items if it.get('sku_id')]
+            sku_map = {}
+            for sid in sku_ids:
+                sku = inv_repo_tmp.get_sku(sid)
+                if sku:
+                    sku_map[sid] = sku
+            mode_result = determine_order_mode(client, items, sku_map)
+            repo.update_order(order_id, {
+                'fulfillment_mode': mode_result['mode'],
+                'pack_type': mode_result['pack_type'],
+            })
+            if mode_result.get('downgraded'):
+                flash(f'안정모드 SKU 포함 → 전체 안정모드(B)로 강등', 'info')
+        except Exception as e:
+            current_app.logger.warning(f'[모드판별실패] order_id={order_id}: {e}')
+
         from services.inventory_service import reserve_stock
         result = reserve_stock(inv_repo, repo, order_id)
         if not result.get('ok'):

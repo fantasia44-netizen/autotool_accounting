@@ -53,6 +53,16 @@
                     <div>{{ client.contact_email or '-' }}</div>
                 </div>
                 <div class="col-md-4">
+                    <div class="text-muted" style="font-size:0.75rem;">풀필먼트 모드</div>
+                    <div>
+                        {% if client.fulfillment_mode == 'speed' %}
+                        <span class="badge bg-warning text-dark"><i class="bi bi-lightning-charge-fill"></i> A모드 (Speed)</span>
+                        {% else %}
+                        <span class="badge bg-primary"><i class="bi bi-shield-check"></i> B모드 (Precision)</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="col-md-4">
                     <div class="text-muted" style="font-size:0.75rem;">상태</div>
                     <div>
                         {% if client.is_active %}<span class="status-badge status-done">활성</span>
@@ -102,7 +112,14 @@
                         <label class="form-label" style="font-size:0.75rem;">주소</label>
                         <input type="text" name="address" class="form-control form-control-sm" value="{{ client.address or '' }}">
                     </div>
-                    <div class="col-md-8">
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size:0.75rem;">풀필먼트 모드</label>
+                        <select name="fulfillment_mode" class="form-select form-select-sm">
+                            <option value="precision" {% if client.fulfillment_mode != 'speed' %}selected{% endif %}>B모드 (Precision) — 고가/검수</option>
+                            <option value="speed" {% if client.fulfillment_mode == 'speed' %}selected{% endif %}>A모드 (Speed) — 대량/속도</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label" style="font-size:0.75rem;">메모</label>
                         <input type="text" name="memo" class="form-control form-control-sm" value="{{ client.memo or '' }}">
                     </div>

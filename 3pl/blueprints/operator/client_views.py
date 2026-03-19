@@ -78,6 +78,7 @@ def client_update(client_id):
     _verify_client_owner(client_id)
     from db_utils import get_repo
     repo = get_repo('client')
+    fm = request.form.get('fulfillment_mode', '').strip()
     data = {
         'name': request.form.get('name', '').strip(),
         'business_no': request.form.get('business_no', '').strip(),
@@ -86,6 +87,7 @@ def client_update(client_id):
         'contact_email': request.form.get('contact_email', '').strip(),
         'address': request.form.get('address', '').strip(),
         'memo': request.form.get('memo', '').strip(),
+        'fulfillment_mode': fm if fm in ('speed', 'precision') else 'precision',
     }
     repo.update_client(client_id, data)
     flash('고객사 정보가 수정되었습니다.', 'success')
