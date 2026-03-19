@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}작업 KPI — {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="{{ url_for('operator.kpi_dashboard') }}">작업 KPI</a>{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="page-title mb-0"><i class="bi bi-speedometer2 me-2"></i>작업 KPI 대시보드</h4>
+    <form method="get" class="d-flex gap-2 align-items-center">
+        <input type="date" name="date" class="form-control form-control-sm" value="{{ selected_date }}" style="width:160px">
+        <button class="btn btn-sm btn-primary">조회</button>
+    </form>
+</div>
+
+<!-- 모드별 요약 카드 -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="stat-card" style="border-left: 4px solid #f59e0b;">
+            <div class="stat-label"><i class="bi bi-lightning-charge-fill text-warning"></i> 속도모드 (A)</div>
+            <div class="stat-value">{{ kpi.speed.completed }}</div>
+            <div class="stat-sub">완료 건수 · {{ kpi.speed.items }}개 상품</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card" style="border-left: 4px solid #2563eb;">
+            <div class="stat-label"><i class="bi bi-shield-check text-primary"></i> 안정모드 (B)</div>
+            <div class="stat-value">{{ kpi.precision.completed }}</div>
+            <div class="stat-sub">완료 건수 · {{ kpi.precision.items }}개 상품</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card" style="border-left: 4px solid #16a34a;">
+            <div class="stat-label"><i class="bi bi-check-circle text-success"></i> 전체 합계</div>
+            <div class="stat-value">{{ kpi.totals.completed }}</div>
+            <div class="stat-sub">작업자 {{ kpi.totals.workers }}명</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card" style="border-left: 4px solid #6b7280;">
+            <div class="stat-label"><i class="bi bi-clock-history"></i> 과금 큐</div>
+            <div class="stat-value">{{ billing.pending }}</div>
+            <div class="stat-sub">처리됨 {{ billing.processed }} · 실패 {{ billing.failed }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- 작업자별 성과 -->
+{% if kpi.workers %}
+<div class="data-card">
+    <div class="data-card-header">
+        <h6 class="mb-0"><i class="bi bi-people me-1"></i>작업자별 성과</h6>
+    </div>
+    <div class="data-card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-compact mb-0">
+                <thead>
+                    <tr>
+                        <th>작업자</th>
+                        <th class="text-end">속도모드 (A)</th>
+                        <th class="text-end">안정모드 (B)</th>
+                        <th class="text-end">합계</th>
+                        <th class="text-end">상품 수</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for uid, data in kpi.workers.items() %}
+                    <tr>
+                        <td class="fw-semibold">{{ worker_names.get(uid|int, '#' ~ uid) }}</td>
+                        <td class="text-end">
+                            {% if data.speed > 0 %}
+                            <span class="badge bg-warning text-dark">{{ data.speed }}</span>
+                            {% else %}-{% endif %}
+                        </td>
+                        <td class="text-end">
+                            {% if data.precision > 0 %}
+                            <span class="badge bg-primary">{{ data.precision }}</span>
+                            {% else %}-{% endif %}
+                        </td>
+                        <td class="text-end fw-bold">{{ data.total }}</td>
+                        <td class="text-end">{{ data.items }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="fw-bold">
+                        <td>합계</td>
+                        <td class="text-end">{{ kpi.speed.completed }}</td>
+                        <td class="text-end">{{ kpi.precision.completed }}</td>
+                        <td class="text-end">{{ kpi.totals.completed }}</td>
+                        <td class="text-end">{{ kpi.totals.items }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-secondary">
+    <i class="bi bi-info-circle me-1"></i>해당 날짜의 작업 기록이 없습니다.
+</div>
+{% endif %}
+{% endblock %}

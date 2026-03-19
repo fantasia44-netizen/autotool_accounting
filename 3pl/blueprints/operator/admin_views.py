@@ -210,3 +210,41 @@ def finance_expense_delete(expense_id):
     flash('비용 삭제 완료', 'success')
     ym = expense.get('year_month', '')
     return redirect(url_for('operator.finance_dashboard', month=ym))
+
+
+# ═══════════════════════════════════════════
+# 작업 KPI 대시보드
+# ═══════════════════════════════════════════
+
+@operator_bp.route('/kpi')
+@login_required
+@_require_operator
+def kpi_dashboard():
+    """작업 KPI 대시보드 — 모드별 처리량, 작업자 성과."""
+    from flask import g
+    from db_utils import get_repo
+    from services.kpi_service import get_team_kpi, get_billing_queue_status
+
+    date_str = request.args.get('date')
+    repo = get_repo('client')
+
+    team_kpi = get_team_kpi(repo.supabase, g.operator_id, date_str)
+    billing_status = get_billing_queue_status(repo.supabase, g.operator_id)
+
+    # 작업자 이름 매핑
+    user_repo = get_repo('user') if hasattr(get_repo, '__call__') else None
+    worker_names = {}
+    if user_repo:
+        try:
+            for uid in team_kpi.get('workers', {}).keys():
+                u = user_repo.get_user(uid)
+                if u:
+                    worker_names[uid] = u.get('name', u.get('username', f'#{uid}'))
+        except Exception:
+            pass
+
+    return render_template('operator/kpi_dashboard.html',
+                           kpi=team_kpi,
+                           billing=billing_status,
+                           worker_names=worker_names,
+                           selected_date=date_str or team_kpi.get('date', ''))
