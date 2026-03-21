@@ -374,9 +374,15 @@ def api_complete_job():
         try:
             inv_repo = get_repo('inventory')
             from services.inventory_service import commit_stock
-            commit_stock(inv_repo, order_id)
-        except Exception:
-            pass  # 예약 없는 경우 무시
+            result = commit_stock(inv_repo, order_id)
+            if result and not result.get('ok'):
+                current_app.logger.warning(
+                    '[패킹완료] 재고커밋 실패 job_id=%s, order_id=%s: %s',
+                    job_id, order_id, result.get('message', ''))
+        except Exception as e:
+            current_app.logger.warning(
+                '[패킹완료] 재고커밋 예외 job_id=%s, order_id=%s: %s',
+                job_id, order_id, e)
 
     # ── 부자재비 과금 ──
     materials_raw = request.form.get('materials', '')
@@ -449,9 +455,15 @@ def api_complete_job_no_video():
         try:
             inv_repo = get_repo('inventory')
             from services.inventory_service import commit_stock
-            commit_stock(inv_repo, order_id)
-        except Exception:
-            pass  # 예약 없는 경우 무시
+            result = commit_stock(inv_repo, order_id)
+            if result and not result.get('ok'):
+                current_app.logger.warning(
+                    '[패킹완료-무영상] 재고커밋 실패 job_id=%s, order_id=%s: %s',
+                    job_id, order_id, result.get('message', ''))
+        except Exception as e:
+            current_app.logger.warning(
+                '[패킹완료-무영상] 재고커밋 예외 job_id=%s, order_id=%s: %s',
+                job_id, order_id, e)
 
     # ── 부자재비 과금 ──
     materials = data.get('materials')

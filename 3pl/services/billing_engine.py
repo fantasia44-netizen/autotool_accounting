@@ -388,7 +388,70 @@ def create_billing_event(billing_repo, client_id, event_type, fees,
 
 
 def cancel_billing_event(billing_repo, client_id, dedupe_prefix):
-    """이벤트 취소 시 해당 과금 역분개."""
-    # TODO: 구현 예정 — 동일 dedupe_prefix의 과금을 찾아서 역분개 레코드 생성
-    logger.info('과금 취소 요청: client=%s, prefix=%s', client_id, dedupe_prefix)
-    pass
+    """이벤트 취소 시 해당 과금 역분개 — Append-only 음수 정정 트랜잭션.
+
+    동일 dedupe_prefix를 가진 기존 과금 로그를 찾아서,
+    각각에 대해 음수(-) 금액의 정정(reversal) 레코드를 Insert.
+    원본 레코드는 절대 삭제/수정하지 않음 (회계 원칙).
+
+    Returns:
+        dict: {'reversed': int, 'skipped': int, 'total_reversed': float}
+    """
+    logger.info('과금 역분개 시작: client=%s, prefix=%s', client_id, dedupe_prefix)
+
+    # 1) dedupe_prefix로 시작하는 기존 과금 로그 조회
+    all_fees = billing_repo.list_fees(client_id, limit=2000)
+    target_fees = [
+        f for f in all_fees
+        if f.get('dedupe_key', '').startswith(dedupe_prefix)
+        and not f.get('is_reversal')
+    ]
+
+    if not target_fees:
+        logger.info('역분개 대상 없음: client=%s, prefix=%s', client_id, dedupe_prefix)
+        return {'reversed': 0, 'skipped': 0, 'total_reversed': 0}
+
+    reversed_count = 0
+    skipped = 0
+    total_reversed = 0.0
+
+    for fee in target_fees:
+        reversal_dedupe = f"REV:{fee.get('dedupe_key', '')}"
+
+        # 이미 역분개된 건인지 확인 (멱등성)
+        existing = billing_repo.find_by_dedupe_key(client_id, reversal_dedupe)
+        if existing:
+            skipped += 1
+            continue
+
+        original_amount = float(fee.get('total_amount', 0))
+        reversal_data = {
+            'client_id': client_id,
+            'fee_name': f"[역분개] {fee.get('fee_name', '')}",
+            'category': fee.get('category', 'custom'),
+            'fee_type': 'reversal',
+            'unit_price': -float(fee.get('unit_price', 0)),
+            'quantity': fee.get('quantity', 1),
+            'total_amount': -original_amount,
+            'dedupe_key': reversal_dedupe,
+            'is_reversal': True,
+            'original_fee_id': fee.get('id'),
+            'year_month': fee.get('year_month'),
+            'description': f"원본 과금 ID {fee.get('id')} 역분개",
+        }
+
+        try:
+            billing_repo.log_fee(reversal_data)
+            reversed_count += 1
+            total_reversed += original_amount
+        except Exception as e:
+            logger.error('역분개 기록 실패: fee_id=%s, error=%s', fee.get('id'), e)
+            skipped += 1
+
+    logger.info('과금 역분개 완료: client=%s, reversed=%d, skipped=%d, total=%.0f',
+                client_id, reversed_count, skipped, total_reversed)
+    return {
+        'reversed': reversed_count,
+        'skipped': skipped,
+        'total_reversed': total_reversed,
+    }
