@@ -6,13 +6,16 @@ GPT 리뷰: "누구나 쓰는 시스템"으로 설계
 Gemini 리뷰: 단가 이력, 체적중량, 일할 보관비, 에러 방어 반영
 """
 import re
+import ast
 import math
+import operator
 import logging
 from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
 
-# ═══ 안전한 수식 파서 ═══
+# ═══ AST 기반 안전 수식 파서 ═══
+# eval() 완전 제거 — AST 화이트리스트 방식으로 교체 (GPT/Gemini P1 권장)
 
 # 허용 함수
 _SAFE_FUNCS = {
@@ -24,30 +27,67 @@ _SAFE_FUNCS = {
     'round': round,
 }
 
+# AST 노드별 허용 연산자
+_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
 # 허용 변수 패턴
 _VAR_PATTERN = re.compile(r'\{(\w+)\}')
 
 
+def _ast_eval(node):
+    """AST 노드를 재귀 평가 — 허용된 노드만 통과 (화이트리스트)."""
+    if isinstance(node, ast.Expression):
+        return _ast_eval(node.body)
+    elif isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)):
+            return float(node.value)
+        raise ValueError(f'허용되지 않는 상수: {node.value!r}')
+    elif isinstance(node, ast.BinOp):
+        op_func = _OPERATORS.get(type(node.op))
+        if not op_func:
+            raise ValueError(f'허용되지 않는 연산자: {type(node.op).__name__}')
+        left = _ast_eval(node.left)
+        right = _ast_eval(node.right)
+        if isinstance(node.op, ast.Pow) and right > 100:
+            raise ValueError(f'거듭제곱 지수 초과: {right}')
+        return float(op_func(left, right))
+    elif isinstance(node, ast.UnaryOp):
+        op_func = _OPERATORS.get(type(node.op))
+        if not op_func:
+            raise ValueError(f'허용되지 않는 단항 연산자: {type(node.op).__name__}')
+        return float(op_func(_ast_eval(node.operand)))
+    elif isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise ValueError('함수 호출만 허용 (메서드/속성 불가)')
+        func_name = node.func.id
+        if func_name not in _SAFE_FUNCS:
+            raise ValueError(f'허용되지 않는 함수: {func_name}')
+        args = [_ast_eval(a) for a in node.args]
+        return float(_SAFE_FUNCS[func_name](*args))
+    else:
+        raise ValueError(f'허용되지 않는 수식 요소: {type(node).__name__}')
+
+
 def _safe_eval(expr_str):
-    """eval 대신 안전한 수식 평가. 허용: 숫자, 사칙연산, 괄호, 안전함수."""
-    # 위험한 패턴 차단
-    dangerous = ['import', '__', 'exec', 'eval', 'open', 'os.', 'sys.',
-                 'lambda', 'class', 'def ', 'global', 'nonlocal']
-    expr_lower = expr_str.lower()
-    for d in dangerous:
-        if d in expr_lower:
-            raise ValueError(f'허용되지 않는 표현: {d}')
+    """AST 기반 안전 수식 평가. 허용: 숫자, 사칙연산, 괄호, 안전함수.
 
-    # 허용 문자만 통과: 숫자, 연산자, 괄호, 공백, 점, 콤마, 함수명
-    cleaned = re.sub(r'[a-zA-Z_]\w*', lambda m: m.group() if m.group() in _SAFE_FUNCS else f'__ERR_{m.group()}__', expr_str)
-    if '__ERR_' in cleaned:
-        bad = re.findall(r'__ERR_(\w+)__', cleaned)
-        raise ValueError(f'허용되지 않는 식별자: {bad}')
-
+    eval() 없이 AST를 직접 파싱하여 화이트리스트 노드만 실행.
+    """
     try:
-        return float(eval(expr_str, {"__builtins__": {}}, _SAFE_FUNCS))
-    except Exception as e:
-        raise ValueError(f'수식 평가 오류: {expr_str} → {e}')
+        tree = ast.parse(expr_str.strip(), mode='eval')
+    except SyntaxError as e:
+        raise ValueError(f'수식 구문 오류: {expr_str} → {e}')
+    return _ast_eval(tree)
 
 
 def evaluate_formula(formula_str, context_vars, min_amount=0):

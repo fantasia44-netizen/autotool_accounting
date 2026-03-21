@@ -48,14 +48,26 @@ class WarehouseRepository(BaseRepository):
         return self._insert(self.LOCATION_TABLE, data)
 
     def update_location(self, location_id, data):
-        """로케이션 수정."""
-        return self.client.table(self.LOCATION_TABLE).update(
-            data).eq('id', location_id).execute()
+        """로케이션 수정 (부모 FK로 테넌트 격리)."""
+        return self._update(self.LOCATION_TABLE, location_id, data)
 
     def list_all_locations(self):
-        """전체 로케이션 목록 (zone 무관, 활성만)."""
+        """전체 로케이션 목록 (zone 무관, 활성만, 테넌트 내 창고만)."""
+        # 1) 현재 테넌트의 창고 ID 조회
+        warehouses = self.list_warehouses()
+        if not warehouses:
+            return []
+        wh_ids = [w['id'] for w in warehouses]
+        # 2) 해당 창고의 zone ID 조회
+        zone_rows = self.client.table(self.ZONE_TABLE).select('id').in_(
+            'warehouse_id', wh_ids).execute().data or []
+        if not zone_rows:
+            return []
+        zone_ids = [z['id'] for z in zone_rows]
+        # 3) 해당 zone의 활성 로케이션만 반환
         return self.client.table(self.LOCATION_TABLE).select(
-            '*').eq('is_active', True).execute().data or []
+            '*').in_('zone_id', zone_ids).eq('is_active', True
+        ).execute().data or []
 
     def list_all_locations_with_path(self):
         """전체 로케이션 + 창고/구역 이름 포함.
@@ -95,7 +107,8 @@ class WarehouseRepository(BaseRepository):
         return result
 
     def get_location(self, location_id):
-        """로케이션 단건 조회."""
-        rows = self.client.table(self.LOCATION_TABLE).select(
-            '*').eq('id', location_id).execute().data or []
+        """로케이션 단건 조회 (skip_tenant: 자식 테이블)."""
+        rows = self._query(self.LOCATION_TABLE,
+                           filters=[('id', 'eq', location_id)],
+                           skip_tenant=True)
         return rows[0] if rows else None
