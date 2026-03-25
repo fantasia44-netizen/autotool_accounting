@@ -59,6 +59,21 @@ class ClientBillingRepository(BaseRepository):
             total += amt
         return {'by_category': summary, 'total': total, 'items': rows}
 
+    def get_bulk_monthly_totals(self, year_month):
+        """전 고객 월매출 일괄 조회 (N+1 제거용, 1회 쿼리).
+
+        Returns: {client_id: total_amount, ...}
+        """
+        rows = self._query(self.LOG_TABLE,
+                           columns='client_id,total_amount',
+                           filters=[('year_month', 'eq', year_month)])
+        totals = {}
+        for r in rows:
+            cid = r.get('client_id')
+            amt = float(r.get('total_amount', 0))
+            totals[cid] = totals.get(cid, 0) + amt
+        return totals
+
     # ── 정산서 ──
 
     def get_invoice(self, client_id, year_month):

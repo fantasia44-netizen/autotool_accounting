@@ -104,6 +104,20 @@ class BaseRepository:
         except Exception:
             pass  # 감사 로그 실패가 비즈니스 로직 중단하면 안 됨
 
+    # 대시보드 캐시 무효화 대상 테이블
+    _DASHBOARD_TABLES = frozenset({
+        'orders', 'order_items', 'skus', 'inventory_stock',
+        'inventory_movements', 'client_billing_logs', 'shipments',
+    })
+
+    def _invalidate_dashboard_cache(self):
+        """CUD 작업 시 대시보드 캐시 자동 무효화."""
+        try:
+            from services.cache import invalidate_dashboard
+            invalidate_dashboard(operator_id=self.operator_id)
+        except Exception:
+            pass  # 캐시 무효화 실패가 비즈니스 로직 중단하면 안 됨
+
     # ── 공통 CRUD 헬퍼 ──
 
     def _query(self, table, columns='*', filters=None, order_by=None,
@@ -159,6 +173,8 @@ class BaseRepository:
         if row:
             self._audit_log('create', table, record_id=row.get('id'),
                             after_data=row)
+            if table in self._DASHBOARD_TABLES:
+                self._invalidate_dashboard_cache()
         return row
 
     def _update(self, table, record_id, payload):
@@ -183,6 +199,8 @@ class BaseRepository:
         if after:
             self._audit_log('update', table, record_id=record_id,
                             before_data=before, after_data=after)
+            if table in self._DASHBOARD_TABLES:
+                self._invalidate_dashboard_cache()
         return after
 
     def _delete(self, table, record_id, deleted_by=None):
@@ -227,6 +245,8 @@ class BaseRepository:
                 if res.data:
                     self._audit_log('delete', table, record_id=record_id,
                                     before_data=before, memo='soft_delete')
+                    if table in self._DASHBOARD_TABLES:
+                        self._invalidate_dashboard_cache()
                     return
             except Exception:
                 pass  # fallback to hard delete
@@ -237,6 +257,8 @@ class BaseRepository:
         q.execute()
         self._audit_log('delete', table, record_id=record_id,
                         before_data=before, memo='hard_delete')
+        if table in self._DASHBOARD_TABLES:
+            self._invalidate_dashboard_cache()
 
     # 부모-자식 관계 (복원 시 부모 존재 검증용)
     _PARENT_REFS = {

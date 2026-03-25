@@ -76,9 +76,13 @@ class InventoryRepository(BaseRepository):
         return self._query(self.STOCK_TABLE,
                            filters=[('sku_id', 'eq', sku_id)])
 
-    def list_all_stock(self):
-        """전체 재고 현황 (테넌트 필터 적용)."""
-        return self._query(self.STOCK_TABLE, order_by='sku_id', order_desc=False)
+    def list_all_stock(self, client_id=None):
+        """전체 재고 현황 (테넌트 필터 적용, client_id 필터 지원)."""
+        filters = []
+        if client_id:
+            filters.append(('client_id', 'eq', client_id))
+        return self._query(self.STOCK_TABLE, filters=filters or None,
+                           order_by='sku_id', order_desc=False)
 
     def upsert_stock(self, data):
         return self._upsert(self.STOCK_TABLE, data,
@@ -101,9 +105,15 @@ class InventoryRepository(BaseRepository):
         return None
 
     def get_low_stock_items(self, threshold=10):
-        """부족 재고 목록 (SKU별 min_stock_qty 우선, 없으면 threshold)."""
-        stocks = self.list_all_stock()
-        skus = self.list_skus() or []
+        """부족 재고 목록 (SKU별 min_stock_qty 우선, 없으면 threshold).
+
+        최적화: columns 제한하여 전송량 최소화, 필요한 컬럼만 조회.
+        """
+        stocks = self._query(self.STOCK_TABLE, columns='sku_id,quantity',
+                             order_by='sku_id', order_desc=False)
+        skus = self._query(self.SKU_TABLE,
+                           columns='id,sku_code,name,client_id,min_stock_qty,storage_temp')
+
         sku_map = {s['id']: s for s in skus}
 
         # SKU별 재고 합산

@@ -13,6 +13,16 @@ from . import operator_bp, _require_operator
 def dashboard():
     from db_utils import get_repo
     from datetime import datetime, timezone
+    from services.cache import dashboard_cache
+
+    op_id = current_user.operator_id or 0
+    cache_key = f'op_dash:{op_id}'
+
+    # 캐시 히트 시 즉시 반환 (TTL 45초)
+    cached = dashboard_cache.get(cache_key)
+    if cached:
+        return render_template('operator/dashboard.html', **cached)
+
     order_repo = get_repo('order')
     inv_repo = get_repo('inventory')
     client_repo = get_repo('client')
@@ -30,34 +40,37 @@ def dashboard():
     total_orders = sum(order_counts.values()) if order_counts else 0
     pending_orders = order_counts.get('pending', 0) + order_counts.get('confirmed', 0)
 
-    # KPI: 클라이언트별 월매출
+    # KPI: 클라이언트별 월매출 — 1회 일괄 조회 (N+1 제거)
     ym = datetime.now(timezone.utc).strftime('%Y-%m')
+    bulk_totals = billing_repo.get_bulk_monthly_totals(ym) or {}
     client_revenue = {}
     for c in clients:
-        try:
-            summary = billing_repo.get_monthly_summary(c['id'], ym)
-            client_revenue[c['id']] = {
-                'name': c.get('company_name', c.get('name', '')),
-                'total': summary.get('total', 0),
-            }
-        except Exception:
-            pass
+        cid = c['id']
+        total = bulk_totals.get(cid, 0)
+        client_revenue[cid] = {
+            'name': c.get('company_name', c.get('name', '')),
+            'total': total,
+        }
     monthly_total = sum(v['total'] for v in client_revenue.values())
 
-    return render_template('operator/dashboard.html',
-                           order_counts=order_counts,
-                           recent_orders=recent_orders,
-                           total_skus=total_skus,
-                           low_stock=low_stock,
-                           low_stock_count=len(low_stock),
-                           expiring_soon_count=len(expiring_soon),
-                           client_count=len(clients),
-                           shipped_count=shipped_count,
-                           total_orders=total_orders,
-                           pending_orders=pending_orders,
-                           client_revenue=client_revenue,
-                           monthly_total=monthly_total,
-                           current_month=ym)
+    ctx = dict(
+        order_counts=order_counts,
+        recent_orders=recent_orders,
+        total_skus=total_skus,
+        low_stock=low_stock,
+        low_stock_count=len(low_stock),
+        expiring_soon_count=len(expiring_soon),
+        client_count=len(clients),
+        shipped_count=shipped_count,
+        total_orders=total_orders,
+        pending_orders=pending_orders,
+        client_revenue=client_revenue,
+        monthly_total=monthly_total,
+        current_month=ym,
+    )
+    dashboard_cache.set(cache_key, ctx, ttl=45)
+
+    return render_template('operator/dashboard.html', **ctx)
 
 
 # ═══ 과금/청구 (SaaS 플랜) ═══

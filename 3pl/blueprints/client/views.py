@@ -21,19 +21,28 @@ def _require_client(f):
 @_require_client
 def dashboard():
     from db_utils import get_repo
+    from services.cache import dashboard_cache
+
+    cid = current_user.client_id
+    cache_key = f'cl_dash:{cid}'
+
+    cached = dashboard_cache.get(cache_key)
+    if cached:
+        return render_template('client/dashboard.html', **cached)
+
     order_repo = get_repo('order')
     inv_repo = get_repo('inventory')
 
-    orders = order_repo.list_orders(client_id=current_user.client_id, limit=5) or []
-    order_counts = order_repo.count_by_status() or {}
-    skus = inv_repo.list_skus(client_id=current_user.client_id) or []
-    stocks = inv_repo.list_all_stock() or []
+    orders = order_repo.list_orders(client_id=cid, limit=5) or []
+    order_counts = order_repo.count_by_status(client_id=cid) or {}
+    skus = inv_repo.list_skus(client_id=cid) or []
+    stocks = inv_repo.list_all_stock(client_id=cid) or []
 
-    return render_template('client/dashboard.html',
-                           orders=orders,
-                           order_counts=order_counts,
-                           skus=skus,
-                           stocks=stocks)
+    ctx = dict(orders=orders, order_counts=order_counts,
+               skus=skus, stocks=stocks)
+    dashboard_cache.set(cache_key, ctx, ttl=30)
+
+    return render_template('client/dashboard.html', **ctx)
 
 
 @client_bp.route('/inventory')
@@ -42,8 +51,9 @@ def dashboard():
 def inventory():
     from db_utils import get_repo
     inv_repo = get_repo('inventory')
-    skus = inv_repo.list_skus(client_id=current_user.client_id)
-    stocks = inv_repo.list_all_stock()
+    cid = current_user.client_id
+    skus = inv_repo.list_skus(client_id=cid)
+    stocks = inv_repo.list_all_stock(client_id=cid)
     return render_template('client/inventory.html', skus=skus, stocks=stocks)
 
 
@@ -55,7 +65,7 @@ def orders():
     repo = get_repo('order')
     status = request.args.get('status')
     items = repo.list_orders(client_id=current_user.client_id, status=status)
-    counts = repo.count_by_status()
+    counts = repo.count_by_status(client_id=current_user.client_id)
     return render_template('client/orders.html', orders=items, counts=counts,
                            filter_status=status)
 
@@ -117,8 +127,9 @@ def inventory_export():
     """재고 현황 엑셀 다운로드."""
     from db_utils import get_repo
     inv_repo = get_repo('inventory')
-    skus = inv_repo.list_skus(client_id=current_user.client_id) or []
-    stocks = inv_repo.list_all_stock() or []
+    cid = current_user.client_id
+    skus = inv_repo.list_skus(client_id=cid) or []
+    stocks = inv_repo.list_all_stock(client_id=cid) or []
 
     # SKU별 재고 합산
     sku_stock = {}

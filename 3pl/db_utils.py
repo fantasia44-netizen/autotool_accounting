@@ -52,6 +52,8 @@ class DemoProxy:
                 return 0
             if name == 'count_by_status':
                 return {'created': 1, 'in_progress': 0, 'completed': 0}
+            if name == 'get_bulk_monthly_totals':
+                return {}
             if name.startswith('count'):
                 return {}
             # 데모 고객사 목록

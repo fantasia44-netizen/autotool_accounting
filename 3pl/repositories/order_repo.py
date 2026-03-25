@@ -59,9 +59,13 @@ class OrderRepository(BaseRepository):
     def update_order_status(self, order_id, status):
         return self._update(self.ORDER_TABLE, order_id, {'status': status})
 
-    def count_by_status(self):
-        """상태별 주문 건수."""
-        rows = self._query(self.ORDER_TABLE, columns='id,status')
+    def count_by_status(self, client_id=None):
+        """상태별 주문 건수 (client_id 필터 지원)."""
+        filters = []
+        if client_id:
+            filters.append(('client_id', 'eq', client_id))
+        rows = self._query(self.ORDER_TABLE, columns='id,status',
+                           filters=filters or None)
         counts = {}
         for r in rows:
             s = r.get('status', 'unknown')
