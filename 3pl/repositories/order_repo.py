@@ -5,7 +5,7 @@ from .base import BaseRepository
 class OrderRepository(BaseRepository):
     """주문, 주문상세, 출고, 배송."""
 
-    ORDER_TABLE = 'api_orders'
+    ORDER_TABLE = 'orders'
     ORDER_ITEM_TABLE = 'order_items'
     SHIPMENT_TABLE = 'shipments'
 

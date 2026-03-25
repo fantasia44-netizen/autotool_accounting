@@ -4,7 +4,7 @@ import time
 # soft delete 컬럼(is_deleted)이 있는 테이블 목록
 SOFT_DELETE_TABLES = frozenset({
     'clients', 'client_rates', 'client_marketplace_credentials', 'skus',
-    'api_orders', 'shipments', 'packing_jobs', 'inbound_receipts',
+    'orders', 'shipments', 'packing_jobs', 'inbound_receipts',
     'inventory_adjustments', 'client_billing_logs', 'client_invoices',
     'picking_lists', 'expenses',
 })
@@ -241,13 +241,13 @@ class BaseRepository:
     # 부모-자식 관계 (복원 시 부모 존재 검증용)
     _PARENT_REFS = {
         'skus': ('clients', 'client_id'),
-        'api_orders': ('clients', 'client_id'),
-        'shipments': ('api_orders', 'order_id'),
+        'orders': ('clients', 'client_id'),
+        'shipments': ('orders', 'order_id'),
         'client_rates': ('clients', 'client_id'),
         'client_billing_logs': ('clients', 'client_id'),
         'client_invoices': ('clients', 'client_id'),
         'client_marketplace_credentials': ('clients', 'client_id'),
-        'picking_lists': ('api_orders', None),  # order_id 없을 수 있음
+        'picking_lists': ('orders', None),  # order_id 없을 수 있음
     }
 
     def _restore(self, table, record_id):
