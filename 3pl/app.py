@@ -79,7 +79,7 @@ def _init_login(app):
             if demo_user and str(demo_user.get('id')) == str(user_id):
                 return User(demo_user)
             return None
-        res = app.supabase.table('app_users').select('*').eq(
+        res = app.supabase.table('users').select('*').eq(
             'id', int(user_id)
         ).execute()
         if res.data:

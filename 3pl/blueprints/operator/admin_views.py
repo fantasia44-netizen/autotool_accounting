@@ -50,7 +50,7 @@ def audit_log():
         'inbound_receipts': '입고', 'inventory_adjustments': '재고조정',
         'client_billing_logs': '과금로그', 'client_invoices': '정산서',
         'picking_lists': '피킹리스트', 'expenses': '비용',
-        'app_users': '사용자', 'warehouse_zones': '창고구역',
+        'users': '사용자', 'warehouse_zones': '창고구역',
     }
 
     return render_template('operator/audit_log.html',

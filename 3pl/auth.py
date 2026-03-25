@@ -118,7 +118,7 @@ def _increment_failed_login(db, user_id, failed_count):
         lock_until = datetime.utcnow() + timedelta(minutes=_ACCOUNT_LOCK_MIN)
         update_data['locked_until'] = lock_until.isoformat()
     try:
-        db.table('app_users').update(update_data).eq('id', user_id).execute()
+        db.table('users').update(update_data).eq('id', user_id).execute()
     except Exception:
         current_app.logger.warning(f'failed_login_count update failed: user_id={user_id}')
 
@@ -126,7 +126,7 @@ def _increment_failed_login(db, user_id, failed_count):
 def _reset_failed_login(db, user_id):
     """로그인 성공 시 실패 카운터 리셋."""
     try:
-        db.table('app_users').update({
+        db.table('users').update({
             'failed_login_count': 0,
             'locked_until': None,
         }).eq('id', user_id).execute()
@@ -197,7 +197,7 @@ def login():
                                    company_code=company_code)
 
         # 2) 해당 운영사의 사용자 조회
-        res = db.table('app_users').select('*').eq('username', username).eq(
+        res = db.table('users').select('*').eq('username', username).eq(
             'operator_id', operator['id']).execute()
         if not res.data:
             _record_ip_attempt(client_ip)
@@ -297,7 +297,7 @@ def join_register():
         return redirect(url_for('auth.join_info', company_code=company_code))
 
     # 중복 체크 (같은 운영사 내 같은 username)
-    dup_res = db.table('app_users').select('id').eq('username', username).eq(
+    dup_res = db.table('users').select('id').eq('username', username).eq(
         'operator_id', operator['id']).execute()
     if dup_res.data:
         flash('이미 사용 중인 아이디입니다.', 'danger')
@@ -305,7 +305,7 @@ def join_register():
 
     # 가입 (승인 대기 상태)
     from werkzeug.security import generate_password_hash
-    db.table('app_users').insert({
+    db.table('users').insert({
         'username': username,
         'password_hash': generate_password_hash(password),
         'name': name,
