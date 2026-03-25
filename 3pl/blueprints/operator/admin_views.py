@@ -46,11 +46,11 @@ def audit_log():
     # 테이블명 한글 매핑
     table_labels = {
         'clients': '고객사', 'client_rates': '요금표', 'skus': '상품',
-        'orders': '주문', 'shipments': '출고', 'packing_jobs': '패킹작업',
+        'api_orders': '주문', 'shipments': '출고', 'packing_jobs': '패킹작업',
         'inbound_receipts': '입고', 'inventory_adjustments': '재고조정',
         'client_billing_logs': '과금로그', 'client_invoices': '정산서',
         'picking_lists': '피킹리스트', 'expenses': '비용',
-        'users': '사용자', 'warehouse_zones': '창고구역',
+        'app_users': '사용자', 'warehouse_zones': '창고구역',
     }
 
     return render_template('operator/audit_log.html',

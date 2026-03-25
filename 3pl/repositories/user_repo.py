@@ -5,7 +5,7 @@ from .base import BaseRepository
 class UserRepository(BaseRepository):
     """사용자 CRUD + 승인 관리."""
 
-    TABLE = 'users'
+    TABLE = 'app_users'
 
     def list_users(self, role=None, is_approved=None):
         filters = []
